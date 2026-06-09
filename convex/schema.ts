@@ -59,7 +59,8 @@ export default defineSchema({
     createdAt: v.number(),
   })
     .index("by_userId", ["userId"])
-    .index("by_lastActiveAt", ["lastActiveAt"]),
+    .index("by_lastActiveAt", ["lastActiveAt"])
+    .index("by_planStatus", ["planStatus"]),
 
   brands: defineTable({
     projectId: v.id("projects"),
@@ -103,6 +104,8 @@ export default defineSchema({
       v.object({
         id: v.string(),
         title: v.string(),
+        selftext: v.optional(v.string()),
+        permalink: v.optional(v.string()),
         url: v.string(),
         score: v.number(),
         commentCount: v.number(),
@@ -118,6 +121,7 @@ export default defineSchema({
     redditPostId: v.string(),
     subreddit: v.string(),
     title: v.string(),
+    selftext: v.optional(v.string()),
     url: v.string(),
     score: v.number(),
     commentCount: v.number(),
@@ -142,7 +146,9 @@ export default defineSchema({
     createdAt: v.number(),
   })
     .index("by_projectId", ["projectId"])
-    .index("by_projectId_status", ["projectId", "status"]),
+    .index("by_projectId_status", ["projectId", "status"])
+    .index("by_status_and_createdAt", ["status", "createdAt"])
+    .index("by_projectId_and_surfacedPostId", ["projectId", "surfacedPostId"]),
 
   postedContent: defineTable({
     projectId: v.id("projects"),
@@ -156,5 +162,35 @@ export default defineSchema({
     createdAt: v.number(),
   })
     .index("by_projectId", ["projectId"])
-    .index("by_cardId", ["cardId"]),
+    .index("by_cardId", ["cardId"])
+    .index("by_projectId_and_createdAt", ["projectId", "createdAt"]),
+
+  rateLimitLog: defineTable({
+    service: v.literal("reddit"),
+    priority: v.union(v.literal(1), v.literal(2), v.literal(3)),
+    requestedAt: v.number(),
+    createdAt: v.number(),
+  }).index("by_service_and_requestedAt", ["service", "requestedAt"]),
+
+  pipelineRuns: defineTable({
+    projectId: v.id("projects"),
+    localDate: v.string(),
+    status: v.union(
+      v.literal("running"),
+      v.literal("completed"),
+      v.literal("failed"),
+      v.literal("skipped"),
+    ),
+    startedAt: v.number(),
+    finishedAt: v.optional(v.number()),
+    error: v.optional(v.string()),
+    counts: v.optional(v.object({
+      fetchedPosts: v.optional(v.number()),
+      newPosts: v.optional(v.number()),
+      filteredPosts: v.optional(v.number()),
+      drafts: v.optional(v.number()),
+      selectedCards: v.optional(v.number()),
+      createdCards: v.optional(v.number()),
+    })),
+  }).index("by_projectId_and_localDate", ["projectId", "localDate"]),
 })

@@ -7,6 +7,7 @@ const app = defineApp({
     REDDIT_CLIENT_ID: v.optional(v.string()),
     REDDIT_CLIENT_SECRET: v.optional(v.string()),
     REDDIT_TOKEN_ENCRYPTION_KEY: v.optional(v.string()),
+    DEEPSEEK_API_KEY: v.optional(v.string()),
   },
 })
 

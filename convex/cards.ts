@@ -1,5 +1,6 @@
 import { v } from "convex/values"
-import { mutation, query } from "./_generated/server"
+import { internal } from "./_generated/api"
+import { internalMutation, mutation, query, type MutationCtx } from "./_generated/server"
 
 export const getActiveCards = query({
   args: {},
@@ -129,25 +130,37 @@ export const declineCard = mutation({
   },
 })
 
+async function expireStaleCardsBatch(ctx: MutationCtx, scheduleNext: boolean) {
+  const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000
+
+  const staleCards = await ctx.db
+    .query("cards")
+    .withIndex("by_status_and_createdAt", (q) =>
+      q.eq("status", "pending").lt("createdAt", sevenDaysAgo),
+    )
+    .take(200)
+
+  for (const card of staleCards) {
+    await ctx.db.patch(card._id, { status: "expired" })
+  }
+
+  if (scheduleNext && staleCards.length === 200) {
+    await ctx.scheduler.runAfter(0, internal.cards.expireStaleCardsInternal, {})
+  }
+
+  return { expired: staleCards.length }
+}
+
 export const expireStaleCards = mutation({
   args: {},
   handler: async (ctx) => {
-    const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000
+    return await expireStaleCardsBatch(ctx, false)
+  },
+})
 
-    // Process in batches — get pending cards and expire old ones
-    const pendingCards = await ctx.db
-      .query("cards")
-      .withIndex("by_projectId_status")
-      .take(200)
-
-    let expired = 0
-    for (const card of pendingCards) {
-      if (card.status === "pending" && card.createdAt < sevenDaysAgo) {
-        await ctx.db.patch(card._id, { status: "expired" })
-        expired++
-      }
-    }
-
-    return { expired }
+export const expireStaleCardsInternal = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    return await expireStaleCardsBatch(ctx, true)
   },
 })

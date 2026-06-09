@@ -298,10 +298,12 @@ export const updateRefreshedToken = internalMutation({
       refreshToken?: string
       tokenExpiresAt: number
       lastCheckedAt: number
+      healthStatus: "healthy"
     } = {
       accessToken: args.encryptedAccessToken,
       tokenExpiresAt: args.tokenExpiresAt,
       lastCheckedAt: Date.now(),
+      healthStatus: "healthy",
     }
 
     if (args.encryptedRefreshToken) {
@@ -312,12 +314,31 @@ export const updateRefreshedToken = internalMutation({
   },
 })
 
+export const markAccountWarning = internalMutation({
+  args: {
+    redditAccountId: v.id("redditAccounts"),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.redditAccountId, {
+      healthStatus: "warning",
+      lastCheckedAt: Date.now(),
+    })
+  },
+})
+
 export const refreshRedditToken = internalAction({
   args: {
     redditAccountId: v.id("redditAccounts"),
   },
   handler: async (ctx, args): Promise<string> => {
-    return await refreshTokenForAccount(ctx, args.redditAccountId)
+    try {
+      return await refreshTokenForAccount(ctx, args.redditAccountId)
+    } catch (error) {
+      await ctx.runMutation(internal.reddit.markAccountWarning, {
+        redditAccountId: args.redditAccountId,
+      })
+      throw error
+    }
   },
 })
 
