@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation"
 import { useMutation, useQuery } from "convex/react"
 import { motion, AnimatePresence } from "framer-motion"
 import { api } from "@/convex/_generated/api"
+import type { Id } from "@/convex/_generated/dataModel"
 import { StepWelcome } from "./step-welcome"
 import { StepProduct } from "./step-product"
 import { StepPlan } from "./step-plan"
@@ -19,6 +20,7 @@ export interface OnboardingData {
   plan: Plan
   redditAccounts: { username: string }[]
   timezone: string
+  projectId: Id<"projects"> | null
 }
 
 const TOTAL_STEPS = 4
@@ -26,11 +28,14 @@ const TOTAL_STEPS = 4
 export default function OnboardingPage() {
   const router = useRouter()
   const status = useQuery(api.onboarding.getOnboardingStatus)
+  const draft = useQuery(api.onboarding.getOnboardingDraft)
+  const prepareOnboardingProject = useMutation(api.onboarding.prepareOnboardingProject)
   const completeOnboarding = useMutation(api.onboarding.completeOnboarding)
 
   const [step, setStep] = useState(1)
   const [direction, setDirection] = useState(1)
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [isPreparingProject, setIsPreparingProject] = useState(false)
 
   const [data, setData] = useState<OnboardingData>({
     projectName: "",
@@ -39,6 +44,7 @@ export default function OnboardingPage() {
     plan: "growth",
     redditAccounts: [],
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    projectId: null,
   })
 
   // Redirect if already onboarded
@@ -47,6 +53,28 @@ export default function OnboardingPage() {
       router.replace("/dashboard")
     }
   }, [status, router])
+
+  useEffect(() => {
+    const searchParams = new URLSearchParams(window.location.search)
+    if (searchParams.get("step") === "4") {
+      setStep(4)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!draft) return
+
+    setData((prev) => ({
+      ...prev,
+      projectId: draft.projectId,
+      projectName: draft.projectName,
+      websiteUrl: draft.websiteUrl,
+      competitorUrl: draft.competitorUrl,
+      plan: draft.plan,
+      timezone: draft.timezone,
+      redditAccounts: draft.redditAccounts,
+    }))
+  }, [draft])
 
   const goNext = useCallback(() => {
     setDirection(1)
@@ -62,6 +90,37 @@ export default function OnboardingPage() {
     setData((prev) => ({ ...prev, ...partial }))
   }, [])
 
+  const ensureDraftProject = useCallback(async () => {
+    const result = await prepareOnboardingProject({
+      projectName: data.projectName,
+      websiteUrl: data.websiteUrl,
+      competitorUrl: data.competitorUrl || undefined,
+      plan: data.plan,
+      timezone: data.timezone,
+    })
+    updateData({ projectId: result.projectId })
+    return result.projectId
+  }, [data, prepareOnboardingProject, updateData])
+
+  const handlePlanNext = useCallback(async () => {
+    setIsPreparingProject(true)
+    try {
+      await ensureDraftProject()
+      goNext()
+    } catch (error) {
+      console.error("Project setup failed:", error)
+    } finally {
+      setIsPreparingProject(false)
+    }
+  }, [ensureDraftProject, goNext])
+
+  const handleConnectReddit = useCallback(async () => {
+    const projectId = data.projectId ?? (await ensureDraftProject())
+    window.location.assign(
+      `/api/reddit/authorize?projectId=${encodeURIComponent(projectId)}&returnTo=onboarding`,
+    )
+  }, [data.projectId, ensureDraftProject])
+
   const handleComplete = useCallback(async () => {
     setIsSubmitting(true)
     try {
@@ -71,14 +130,7 @@ export default function OnboardingPage() {
         competitorUrl: data.competitorUrl || undefined,
         plan: data.plan,
         timezone: data.timezone,
-        redditAccount:
-          data.redditAccounts.length > 0
-            ? {
-                username: data.redditAccounts[0].username,
-                accessToken: "placeholder_access_token",
-                refreshToken: "placeholder_refresh_token",
-              }
-            : undefined,
+        projectId: data.projectId ?? undefined,
       })
       router.replace("/dashboard")
     } catch (error) {
@@ -147,16 +199,17 @@ export default function OnboardingPage() {
               <StepPlan
                 data={data}
                 updateData={updateData}
-                onNext={goNext}
+                onNext={handlePlanNext}
                 onBack={goBack}
+                isPreparing={isPreparingProject}
               />
             )}
             {step === 4 && (
               <StepReddit
                 data={data}
-                updateData={updateData}
                 onBack={goBack}
                 onComplete={handleComplete}
+                onConnectReddit={handleConnectReddit}
                 isSubmitting={isSubmitting}
               />
             )}

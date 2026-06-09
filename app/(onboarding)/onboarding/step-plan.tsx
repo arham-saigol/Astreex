@@ -9,6 +9,7 @@ interface Props {
   updateData: (partial: Partial<OnboardingData>) => void
   onNext: () => void
   onBack: () => void
+  isPreparing: boolean
 }
 
 const plans: {
@@ -54,7 +55,7 @@ const plans: {
   },
 ]
 
-export function StepPlan({ data, updateData, onNext, onBack }: Props) {
+export function StepPlan({ data, updateData, onNext, onBack, isPreparing }: Props) {
   const selectedPlan = plans.find((p) => p.id === data.plan)
 
   return (
@@ -130,8 +131,14 @@ export function StepPlan({ data, updateData, onNext, onBack }: Props) {
         <Button type="button" variant="ghost" size="lg" onClick={onBack}>
           <ArrowLeft className="size-4" />
         </Button>
-        <Button type="button" className="flex-1" size="lg" onClick={onNext}>
-          Continue with {selectedPlan?.name}
+        <Button
+          type="button"
+          className="flex-1"
+          size="lg"
+          onClick={onNext}
+          disabled={isPreparing}
+        >
+          {isPreparing ? "Preparing..." : `Continue with ${selectedPlan?.name}`}
         </Button>
       </div>
     </div>

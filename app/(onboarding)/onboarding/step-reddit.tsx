@@ -7,9 +7,9 @@ import type { OnboardingData, Plan } from "./page"
 
 interface Props {
   data: OnboardingData
-  updateData: (partial: Partial<OnboardingData>) => void
   onBack: () => void
   onComplete: () => void
+  onConnectReddit: () => Promise<void>
   isSubmitting: boolean
 }
 
@@ -19,23 +19,28 @@ const planSlots: Record<Plan, number> = {
   scale: 5,
 }
 
-export function StepReddit({ data, updateData, onBack, onComplete, isSubmitting }: Props) {
+export function StepReddit({
+  data,
+  onBack,
+  onComplete,
+  onConnectReddit,
+  isSubmitting,
+}: Props) {
   const [isConnecting, setIsConnecting] = useState(false)
   const maxSlots = planSlots[data.plan]
   const connectedAccounts = data.redditAccounts
   const hasAtLeastOne = connectedAccounts.length > 0
   const canAddMore = connectedAccounts.length < maxSlots
 
-  const simulateOAuth = useCallback(async () => {
+  const connectReddit = useCallback(async () => {
     setIsConnecting(true)
-    // Simulate OAuth delay
-    await new Promise((resolve) => setTimeout(resolve, 1200))
-    const fakeUsername = `user_${Math.random().toString(36).slice(2, 8)}`
-    updateData({
-      redditAccounts: [...connectedAccounts, { username: fakeUsername }],
-    })
-    setIsConnecting(false)
-  }, [connectedAccounts, updateData])
+    try {
+      await onConnectReddit()
+    } catch (error) {
+      console.error("Reddit connection failed:", error)
+      setIsConnecting(false)
+    }
+  }, [onConnectReddit])
 
   return (
     <div className="space-y-6">
@@ -73,7 +78,7 @@ export function StepReddit({ data, updateData, onBack, onComplete, isSubmitting 
             <Button
               type="button"
               size="sm"
-              onClick={simulateOAuth}
+              onClick={connectReddit}
               disabled={isConnecting}
             >
               {isConnecting ? "Connecting…" : "Connect"}
@@ -85,7 +90,7 @@ export function StepReddit({ data, updateData, onBack, onComplete, isSubmitting 
         {hasAtLeastOne && canAddMore && (
           <button
             type="button"
-            onClick={simulateOAuth}
+            onClick={connectReddit}
             disabled={isConnecting}
             className="flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-border p-4 text-sm text-text-secondary transition-colors hover:border-accent/40 hover:text-text-primary disabled:opacity-50"
           >

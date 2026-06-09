@@ -463,7 +463,11 @@ function AccountTab({
               variant="outline"
               size="sm"
               disabled={!canConnect}
-              onClick={() => toast.info("Reddit connection flow coming soon.")}
+              onClick={() =>
+                window.location.assign(
+                  `/api/reddit/authorize?projectId=${encodeURIComponent(context.project._id)}&returnTo=settings`,
+                )
+              }
             >
               <Plus className="size-3.5" />
               Connect another account

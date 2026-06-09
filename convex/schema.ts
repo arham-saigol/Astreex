@@ -9,6 +9,10 @@ const planStatus = v.union(
   v.literal("past_due"),
   v.literal("trial_expired"),
 )
+const onboardingStatus = v.union(
+  v.literal("in_progress"),
+  v.literal("complete"),
+)
 const redditHealthStatus = v.union(
   v.literal("healthy"),
   v.literal("warning"),
@@ -48,6 +52,7 @@ export default defineSchema({
     trialEndsAt: v.optional(v.number()),
     creemCustomerId: v.optional(v.string()),
     creemSubscriptionId: v.optional(v.string()),
+    onboardingStatus: v.optional(onboardingStatus),
     timezone: v.string(),
     lastAnalyticsRefresh: v.optional(v.number()),
     lastActiveAt: v.number(),
@@ -75,7 +80,9 @@ export default defineSchema({
     healthStatus: redditHealthStatus,
     lastCheckedAt: v.optional(v.number()),
     createdAt: v.number(),
-  }).index("by_projectId", ["projectId"]),
+  })
+    .index("by_projectId", ["projectId"])
+    .index("by_projectId_and_redditUsername", ["projectId", "redditUsername"]),
 
   subreddits: defineTable({
     projectId: v.id("projects"),
