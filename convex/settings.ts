@@ -1,0 +1,297 @@
+import { v } from "convex/values"
+import {
+  internalMutation,
+  mutation,
+  query,
+  type MutationCtx,
+  type QueryCtx,
+} from "./_generated/server"
+import { internal } from "./_generated/api"
+import type { Id } from "./_generated/dataModel"
+
+const profileJsonValidator = v.string()
+
+type Plan = "starter" | "growth" | "scale"
+
+async function getCurrentUser(ctx: QueryCtx | MutationCtx) {
+  const identity = await ctx.auth.getUserIdentity()
+  if (!identity) throw new Error("Not authenticated")
+
+  const user = await ctx.db
+    .query("users")
+    .withIndex("by_clerkId", (q) => q.eq("clerkId", identity.subject))
+    .unique()
+  if (!user) throw new Error("User not found")
+
+  return user
+}
+
+async function getOwnedProject(
+  ctx: QueryCtx | MutationCtx,
+  projectId: Id<"projects">,
+) {
+  const user = await getCurrentUser(ctx)
+  const project = await ctx.db.get(projectId)
+
+  if (!project || project.userId !== user._id) {
+    throw new Error("Not authorized")
+  }
+
+  return project
+}
+
+async function getCurrentProject(ctx: QueryCtx) {
+  const user = await getCurrentUser(ctx)
+  const project = await ctx.db
+    .query("projects")
+    .withIndex("by_userId", (q) => q.eq("userId", user._id))
+    .first()
+
+  if (!project) return null
+
+  return { user, project }
+}
+
+function planAccountLimit(plan: Plan) {
+  if (plan === "starter") return 1
+  if (plan === "growth") return 3
+  return 5
+}
+
+async function deleteProjectRows(
+  ctx: MutationCtx,
+  projectId: Id<"projects">,
+) {
+  const tables = [
+    "postedContent",
+    "cards",
+    "surfacedPosts",
+    "subreddits",
+    "redditAccounts",
+    "brands",
+  ] as const
+
+  let deletedRows = 0
+
+  for (const table of tables) {
+    const rows = await ctx.db
+      .query(table)
+      .withIndex("by_projectId", (q) => q.eq("projectId", projectId))
+      .take(100)
+
+    for (const row of rows) {
+      await ctx.db.delete(row._id)
+      deletedRows++
+    }
+  }
+
+  return deletedRows
+}
+
+async function hasProjectRows(ctx: MutationCtx, projectId: Id<"projects">) {
+  const tables = [
+    "postedContent",
+    "cards",
+    "surfacedPosts",
+    "subreddits",
+    "redditAccounts",
+    "brands",
+  ] as const
+
+  for (const table of tables) {
+    const rows = await ctx.db
+      .query(table)
+      .withIndex("by_projectId", (q) => q.eq("projectId", projectId))
+      .take(1)
+
+    if (rows.length > 0) return true
+  }
+
+  return false
+}
+
+async function runDeleteProjectBatch(
+  ctx: MutationCtx,
+  projectId: Id<"projects">,
+  userId: Id<"users">,
+) {
+  const project = await ctx.db.get(projectId)
+  if (!project) return
+
+  if (project.userId !== userId) {
+    throw new Error("Not authorized")
+  }
+
+  if (project.planStatus !== "canceled") {
+    throw new Error("Cancel your plan before deleting this project")
+  }
+
+  await deleteProjectRows(ctx, projectId)
+
+  if (await hasProjectRows(ctx, projectId)) {
+    await ctx.scheduler.runAfter(0, internal.settings.deleteProjectBatch, {
+      projectId,
+      userId,
+    })
+    return
+  }
+
+  await ctx.db.delete(projectId)
+}
+
+export const getSettingsContext = query({
+  args: {},
+  handler: async (ctx) => {
+    const current = await getCurrentProject(ctx)
+    if (!current) return null
+
+    const { user, project } = current
+    const brand = await ctx.db
+      .query("brands")
+      .withIndex("by_projectId", (q) => q.eq("projectId", project._id))
+      .first()
+
+    const redditAccounts = await ctx.db
+      .query("redditAccounts")
+      .withIndex("by_projectId", (q) => q.eq("projectId", project._id))
+      .take(20)
+
+    return {
+      user: {
+        name: user.name ?? "",
+        email: user.email,
+        avatarUrl: user.avatarUrl ?? null,
+      },
+      project: {
+        _id: project._id,
+        name: project.name,
+        plan: project.plan,
+        planStatus: project.planStatus,
+        trialEndsAt: project.trialEndsAt ?? null,
+        accountLimit: planAccountLimit(project.plan),
+      },
+      brand: brand
+        ? {
+            _id: brand._id,
+            websiteUrl: brand.websiteUrl,
+            competitorUrl: brand.competitorUrl ?? "",
+            profileJson: brand.profileJson,
+          }
+        : null,
+      redditAccounts: redditAccounts.map((account) => ({
+        _id: account._id,
+        redditUsername: account.redditUsername,
+        healthStatus: account.healthStatus,
+        isActive: account.isActive,
+        createdAt: account.createdAt,
+      })),
+    }
+  },
+})
+
+export const updateUserName = mutation({
+  args: {
+    name: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUser(ctx)
+    const name = args.name.trim()
+
+    if (!name) throw new Error("Name is required")
+
+    await ctx.db.patch(user._id, { name })
+  },
+})
+
+export const updateBrandProfile = mutation({
+  args: {
+    projectId: v.id("projects"),
+    profileJson: profileJsonValidator,
+  },
+  handler: async (ctx, args) => {
+    await getOwnedProject(ctx, args.projectId)
+
+    JSON.parse(args.profileJson)
+
+    const brand = await ctx.db
+      .query("brands")
+      .withIndex("by_projectId", (q) => q.eq("projectId", args.projectId))
+      .first()
+    if (!brand) throw new Error("Brand not found")
+
+    await ctx.db.patch(brand._id, {
+      profileJson: args.profileJson,
+      updatedAt: Date.now(),
+    })
+  },
+})
+
+export const updateBrandUrls = mutation({
+  args: {
+    projectId: v.id("projects"),
+    websiteUrl: v.string(),
+    competitorUrl: v.string(),
+  },
+  handler: async (ctx, args) => {
+    await getOwnedProject(ctx, args.projectId)
+
+    const websiteUrl = args.websiteUrl.trim()
+    const competitorUrl = args.competitorUrl.trim()
+    if (!websiteUrl) throw new Error("Website URL is required")
+
+    const brand = await ctx.db
+      .query("brands")
+      .withIndex("by_projectId", (q) => q.eq("projectId", args.projectId))
+      .first()
+    if (!brand) throw new Error("Brand not found")
+
+    await ctx.db.patch(brand._id, {
+      websiteUrl,
+      competitorUrl,
+      updatedAt: Date.now(),
+    })
+  },
+})
+
+export const disconnectRedditAccount = mutation({
+  args: {
+    redditAccountId: v.id("redditAccounts"),
+  },
+  handler: async (ctx, args) => {
+    const account = await ctx.db.get(args.redditAccountId)
+    if (!account) throw new Error("Reddit account not found")
+
+    await getOwnedProject(ctx, account.projectId)
+    await ctx.db.delete(args.redditAccountId)
+  },
+})
+
+export const deleteProject = mutation({
+  args: {
+    projectId: v.id("projects"),
+    confirmation: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const project = await getOwnedProject(ctx, args.projectId)
+
+    if (args.confirmation !== "DELETE PROJECT") {
+      throw new Error("Confirmation does not match")
+    }
+
+    if (project.planStatus !== "canceled") {
+      throw new Error("Cancel your plan before deleting this project")
+    }
+
+    await runDeleteProjectBatch(ctx, args.projectId, project.userId)
+  },
+})
+
+export const deleteProjectBatch = internalMutation({
+  args: {
+    projectId: v.id("projects"),
+    userId: v.id("users"),
+  },
+  handler: async (ctx, args) => {
+    await runDeleteProjectBatch(ctx, args.projectId, args.userId)
+  },
+})
