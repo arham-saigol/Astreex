@@ -1,5 +1,6 @@
 import { v } from "convex/values"
 import { internalQuery } from "../_generated/server"
+import { getPlanLimits } from "../lib/planLimits"
 
 export const getProjectReadiness = internalQuery({
   args: {
@@ -49,12 +50,25 @@ export const loadActiveSubreddits = internalQuery({
     projectId: v.id("projects"),
   },
   handler: async (ctx, args) => {
-    return await ctx.db
+    const project = await ctx.db.get(args.projectId)
+    if (!project) return []
+
+    const limits = getPlanLimits(project.plan)
+    const subreddits = await ctx.db
       .query("subreddits")
       .withIndex("by_projectId_active", (q) =>
         q.eq("projectId", args.projectId).eq("active", true),
       )
       .take(100)
+
+    return subreddits
+      .sort((a, b) => {
+        if (a.relevanceScore !== b.relevanceScore) {
+          return b.relevanceScore - a.relevanceScore
+        }
+        return a._creationTime - b._creationTime
+      })
+      .slice(0, limits.maxSubreddits)
   },
 })
 
@@ -100,6 +114,9 @@ export const loadReplyDraftContext = internalQuery({
     surfacedPostId: v.id("surfacedPosts"),
   },
   handler: async (ctx, args) => {
+    const project = await ctx.db.get(args.projectId)
+    if (!project) throw new Error("Project not found")
+
     const brand = await ctx.db
       .query("brands")
       .withIndex("by_projectId", (q) => q.eq("projectId", args.projectId))
@@ -128,6 +145,9 @@ export const loadOriginalDraftContext = internalQuery({
     targetSubreddit: v.string(),
   },
   handler: async (ctx, args) => {
+    const project = await ctx.db.get(args.projectId)
+    if (!project) throw new Error("Project not found")
+
     const brand = await ctx.db
       .query("brands")
       .withIndex("by_projectId", (q) => q.eq("projectId", args.projectId))
@@ -136,14 +156,23 @@ export const loadOriginalDraftContext = internalQuery({
       throw new Error("Brand profile is missing")
     }
 
+    const limits = getPlanLimits(project.plan)
     const subreddits = await ctx.db
       .query("subreddits")
       .withIndex("by_projectId_active", (q) =>
         q.eq("projectId", args.projectId).eq("active", true),
       )
       .take(100)
+    const cappedSubreddits = subreddits
+      .sort((a, b) => {
+        if (a.relevanceScore !== b.relevanceScore) {
+          return b.relevanceScore - a.relevanceScore
+        }
+        return a._creationTime - b._creationTime
+      })
+      .slice(0, limits.maxSubreddits)
 
-    const subreddit = subreddits.find(
+    const subreddit = cappedSubreddits.find(
       (item) => item.name.toLowerCase() === args.targetSubreddit.toLowerCase(),
     )
     if (!subreddit) throw new Error("Target subreddit is not active")

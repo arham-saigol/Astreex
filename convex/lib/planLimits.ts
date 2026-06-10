@@ -44,6 +44,18 @@ export function getPipelineLimits(plan: Plan) {
   return LIMITS[plan]
 }
 
+export function getPlanLimits(plan: string) {
+  const normalizedPlan: Plan =
+    plan === "growth" || plan === "scale" ? plan : "starter"
+  const limits = LIMITS[normalizedPlan]
+
+  return {
+    cardsPerDay: limits.cardsPerDay,
+    maxSubreddits: limits.monitoredSubreddits,
+    maxRedditAccounts: limits.redditAccounts,
+  }
+}
+
 export function getSubredditDiscoveryLimits(plan: string) {
   switch (plan) {
     case "starter":

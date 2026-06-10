@@ -1,7 +1,7 @@
 "use client"
 
 import { useMemo, useState } from "react"
-import { useRouter } from "next/navigation"
+import { useRouter, useSearchParams } from "next/navigation"
 import { useClerk, useUser } from "@clerk/nextjs"
 import { useMutation, useQuery } from "convex/react"
 import { toast } from "sonner"
@@ -30,6 +30,7 @@ import {
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
+import { UpgradeDialog } from "@/components/upgrade-dialog"
 import { cn } from "@/lib/utils"
 
 type Tab = "account" | "brand" | "billing"
@@ -71,7 +72,15 @@ type SettingsContext = {
     onboardingStatus: OnboardingStatus | null
     onboardingError: string | null
     trialEndsAt: number | null
+    billingInterval: "monthly" | "annual" | null
+    cancelAtPeriodEnd: boolean
+    hasCreemCustomer: boolean
     accountLimit: number
+    limits: {
+      cardsPerDay: number
+      maxSubreddits: number
+      maxRedditAccounts: number
+    }
   }
   brand: {
     _id: Id<"brands">
@@ -365,7 +374,7 @@ function AccountTab({
   const [confirmation, setConfirmation] = useState("")
   const [isDeleting, setIsDeleting] = useState(false)
 
-  const usedAccounts = context.redditAccounts.length
+  const usedAccounts = context.redditAccounts.filter((account) => account.isActive).length
   const accountLimit = context.project.accountLimit
   const canConnect = usedAccounts < accountLimit
   const canDelete = context.project.planStatus === "canceled"
@@ -839,11 +848,45 @@ function BillingTab({
   context: SettingsContext
 }) {
   const [now] = useState(() => Date.now())
+  const [upgradeOpen, setUpgradeOpen] = useState(false)
+  const [portalLoading, setPortalLoading] = useState(false)
+  const billing = useQuery(api.billing.getProjectBillingStatus)
   const currentPlan = plans.find((plan) => plan.id === context.project.plan) ?? plans[0]
   const currentIndex = plans.findIndex((plan) => plan.id === context.project.plan)
   const trialEndsAt = context.project.trialEndsAt
   const daysRemaining =
     trialEndsAt === null ? 0 : Math.max(0, Math.ceil((trialEndsAt - now) / 86400000))
+  const hasPortalAccess =
+    (context.project.planStatus === "active" ||
+      context.project.planStatus === "past_due") &&
+    context.project.hasCreemCustomer
+  const disabledSubreddits = billing?.disabledCounts.subreddits ?? 0
+  const disabledAccounts = billing?.disabledCounts.redditAccounts ?? 0
+
+  const openBilling = async () => {
+    if (!hasPortalAccess) {
+      setUpgradeOpen(true)
+      return
+    }
+
+    setPortalLoading(true)
+    try {
+      const response = await fetch("/api/creem/portal", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectId: context.project._id }),
+      })
+
+      if (!response.ok) throw new Error(await response.text())
+
+      const result = (await response.json()) as { portalUrl?: string }
+      if (!result.portalUrl) throw new Error("Portal URL was missing")
+      window.location.assign(result.portalUrl)
+    } catch (error) {
+      toast.error(getErrorMessage(error))
+      setPortalLoading(false)
+    }
+  }
 
   return (
     <div className="space-y-8">
@@ -867,13 +910,28 @@ function BillingTab({
                   {daysRemaining} days remaining in trial. Ends {formatDate(trialEndsAt)}.
                 </p>
               ) : null}
+              {context.project.billingInterval ? (
+                <p className="mt-2 text-[13px] text-text-secondary">
+                  Billed {context.project.billingInterval}.
+                </p>
+              ) : null}
             </div>
             <div className="grid gap-2 text-[13px] text-text-secondary sm:text-right">
-              <span>{currentPlan.cardsPerDay}</span>
-              <span>{currentPlan.subreddits}</span>
-              <span>{currentPlan.accounts} Reddit accounts</span>
+              <span>{context.project.limits.cardsPerDay} cards/day</span>
+              <span>{context.project.limits.maxSubreddits} subreddits</span>
+              <span>{context.project.limits.maxRedditAccounts} Reddit accounts</span>
             </div>
           </div>
+          {context.project.cancelAtPeriodEnd ? (
+            <p className="mt-4 rounded-lg border border-warning/30 bg-warning/10 p-3 text-[13px] text-text-primary">
+              This subscription is scheduled to cancel at the end of the current billing period.
+            </p>
+          ) : null}
+          {disabledSubreddits > 0 || disabledAccounts > 0 ? (
+            <p className="mt-4 rounded-lg bg-muted p-3 text-[13px] text-text-secondary">
+              Downgrade limits disabled {disabledSubreddits} subreddits and {disabledAccounts} Reddit accounts.
+            </p>
+          ) : null}
         </div>
       </Section>
 
@@ -930,9 +988,9 @@ function BillingTab({
                   className="mt-4 w-full"
                   variant={isCurrent ? "secondary" : "outline"}
                   disabled={isCurrent}
-                  onClick={() => toast.info("Billing integration coming soon.")}
+                  onClick={openBilling}
                 >
-                  {isCurrent ? "Current plan" : action}
+                  {isCurrent ? "Current plan" : hasPortalAccess ? `${action} in portal` : action}
                 </Button>
               </div>
             )
@@ -945,14 +1003,21 @@ function BillingTab({
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex items-center gap-3">
               <CreditCard className="size-4 text-text-tertiary" strokeWidth={1.5} />
-              <p className="text-[14px] text-text-primary">Payment method: Not configured</p>
+              <p className="text-[14px] text-text-primary">
+                Payment method: {context.project.hasCreemCustomer ? "Managed in Creem" : "Not configured"}
+              </p>
             </div>
             <Button
               type="button"
               variant="outline"
-              onClick={() => toast.info("Billing integration coming soon.")}
+              onClick={openBilling}
+              disabled={portalLoading}
             >
-              Add payment method
+              {portalLoading
+                ? "Opening..."
+                : hasPortalAccess
+                  ? "Manage billing"
+                  : "Add billing"}
             </Button>
           </div>
 
@@ -964,12 +1029,21 @@ function BillingTab({
           </div>
         </div>
       </Section>
+
+      <UpgradeDialog
+        open={upgradeOpen}
+        onOpenChange={setUpgradeOpen}
+        projectId={context.project._id}
+      />
     </div>
   )
 }
 
 export default function SettingsPage() {
-  const [activeTab, setActiveTab] = useState<Tab>("account")
+  const searchParams = useSearchParams()
+  const [activeTab, setActiveTab] = useState<Tab>(
+    searchParams.get("tab") === "billing" ? "billing" : "account",
+  )
   const context = useQuery(api.settings.getSettingsContext)
 
   if (context === undefined) {

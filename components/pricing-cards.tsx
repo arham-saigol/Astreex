@@ -6,23 +6,26 @@ import { Check } from "lucide-react"
 
 import { cn } from "@/lib/utils"
 
+export type PricingPlan = "starter" | "growth" | "scale"
+export type PricingInterval = "monthly" | "annual"
+
 const plans = [
   {
-    id: "starter",
+    id: "starter" as const,
     name: "Starter",
     description: "For solo founders validating a channel.",
     monthlyPrice: 29,
     annualPrice: 24,
     features: [
       "1 Reddit account",
-      "5 AI reply cards per day",
-      "2 original posts per week",
+      "5 cards per day",
+      "10 monitored subreddits",
       "Shadow ban monitoring",
       "Email support",
     ],
   },
   {
-    id: "growth",
+    id: "growth" as const,
     name: "Growth",
     description: "For founders scaling Reddit distribution.",
     monthlyPrice: 49,
@@ -30,23 +33,23 @@ const plans = [
     recommended: true,
     features: [
       "3 Reddit accounts",
-      "15 AI reply cards per day",
-      "5 original posts per week",
+      "15 cards per day",
+      "25 monitored subreddits",
       "Shadow ban protection",
       "Subreddit radar",
       "Priority support",
     ],
   },
   {
-    id: "scale",
+    id: "scale" as const,
     name: "Scale",
     description: "For teams running multi-brand campaigns.",
     monthlyPrice: 99,
     annualPrice: 83,
     features: [
-      "10 Reddit accounts",
-      "Unlimited AI reply cards",
-      "Unlimited original posts",
+      "5 Reddit accounts",
+      "35 cards per day",
+      "50 monitored subreddits",
       "Shadow ban protection",
       "Subreddit radar + scoring",
       "Dedicated account manager",
@@ -54,41 +57,58 @@ const plans = [
   },
 ]
 
-export function PricingCards() {
-  const [annual, setAnnual] = useState(false)
+export function PricingCards({
+  interval,
+  showToggle = true,
+  onSelect,
+}: {
+  interval?: PricingInterval
+  showToggle?: boolean
+  onSelect?: (plan: PricingPlan) => void
+}) {
+  const [internalInterval, setInternalInterval] = useState<PricingInterval>("monthly")
+  const activeInterval = interval ?? internalInterval
+  const annual = activeInterval === "annual"
+
+  const setInterval = (value: PricingInterval) => {
+    if (interval === undefined) setInternalInterval(value)
+  }
 
   return (
     <div className="space-y-10">
-      {/* Toggle */}
-      <div className="flex items-center justify-center gap-3">
-        <button
-          onClick={() => setAnnual(false)}
-          className={cn(
-            "rounded-lg px-4 py-2 text-sm font-medium transition-all",
-            !annual
-              ? "bg-surface text-text-primary shadow-sm ring-1 ring-border"
-              : "text-text-secondary hover:text-text-primary"
+      {showToggle ? (
+        <div className="flex items-center justify-center gap-3">
+          <button
+            type="button"
+            onClick={() => setInterval("monthly")}
+            className={cn(
+              "rounded-lg px-4 py-2 text-sm font-medium transition-all",
+              !annual
+                ? "bg-surface text-text-primary shadow-sm ring-1 ring-border"
+                : "text-text-secondary hover:text-text-primary"
+            )}
+          >
+            Monthly
+          </button>
+          <button
+            type="button"
+            onClick={() => setInterval("annual")}
+            className={cn(
+              "rounded-lg px-4 py-2 text-sm font-medium transition-all",
+              annual
+                ? "bg-surface text-text-primary shadow-sm ring-1 ring-border"
+                : "text-text-secondary hover:text-text-primary"
+            )}
+          >
+            Annual
+          </button>
+          {annual && (
+            <span className="rounded-full bg-success/10 px-2.5 py-1 text-xs font-medium text-success">
+              Save ~17%
+            </span>
           )}
-        >
-          Monthly
-        </button>
-        <button
-          onClick={() => setAnnual(true)}
-          className={cn(
-            "rounded-lg px-4 py-2 text-sm font-medium transition-all",
-            annual
-              ? "bg-surface text-text-primary shadow-sm ring-1 ring-border"
-              : "text-text-secondary hover:text-text-primary"
-          )}
-        >
-          Annual
-        </button>
-        {annual && (
-          <span className="rounded-full bg-success/10 px-2.5 py-1 text-xs font-medium text-success">
-            Save ~17%
-          </span>
-        )}
-      </div>
+        </div>
+      ) : null}
 
       {/* Cards */}
       <div className="grid gap-6 md:grid-cols-3">
@@ -144,17 +164,32 @@ export function PricingCards() {
                 ))}
               </ul>
 
-              <Link
-                href={`/sign-up?plan=${plan.id}`}
-                className={cn(
-                  "inline-flex h-10 items-center justify-center rounded-lg px-4 text-sm font-medium transition-colors",
-                  plan.recommended
-                    ? "bg-accent text-accent-foreground hover:bg-accent-hover"
-                    : "border border-border bg-background text-text-primary hover:bg-muted"
-                )}
-              >
-                Start free trial
-              </Link>
+              {onSelect ? (
+                <button
+                  type="button"
+                  onClick={() => onSelect(plan.id)}
+                  className={cn(
+                    "inline-flex h-10 items-center justify-center rounded-lg px-4 text-sm font-medium transition-colors",
+                    plan.recommended
+                      ? "bg-accent text-accent-foreground hover:bg-accent-hover"
+                      : "border border-border bg-background text-text-primary hover:bg-muted"
+                  )}
+                >
+                  Select {plan.name}
+                </button>
+              ) : (
+                <Link
+                  href={`/sign-up?plan=${plan.id}`}
+                  className={cn(
+                    "inline-flex h-10 items-center justify-center rounded-lg px-4 text-sm font-medium transition-colors",
+                    plan.recommended
+                      ? "bg-accent text-accent-foreground hover:bg-accent-hover"
+                      : "border border-border bg-background text-text-primary hover:bg-muted"
+                  )}
+                >
+                  Start free trial
+                </Link>
+              )}
             </div>
           )
         })}

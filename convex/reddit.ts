@@ -11,19 +11,12 @@ import {
 } from "./_generated/server"
 import { internal } from "./_generated/api"
 import type { Id } from "./_generated/dataModel"
-
-type Plan = "starter" | "growth" | "scale"
+import { getPlanLimits } from "./lib/planLimits"
 
 type TokenRow = {
   accessToken: string
   refreshToken: string
   tokenExpiresAt: number
-}
-
-function planAccountLimit(plan: Plan) {
-  if (plan === "starter") return 1
-  if (plan === "growth") return 3
-  return 5
 }
 
 async function getCurrentUser(ctx: QueryCtx | MutationCtx) {
@@ -123,11 +116,13 @@ async function decryptToken(payload: string) {
   return new TextDecoder().decode(plaintext)
 }
 
-async function countProjectAccounts(ctx: QueryCtx | MutationCtx, projectId: Id<"projects">) {
-  return await ctx.db
+async function countActiveProjectAccounts(ctx: QueryCtx | MutationCtx, projectId: Id<"projects">) {
+  const accounts = await ctx.db
     .query("redditAccounts")
     .withIndex("by_projectId", (q) => q.eq("projectId", projectId))
     .take(20)
+
+  return accounts.filter((account) => account.isActive)
 }
 
 async function refreshTokenForAccount(
@@ -197,8 +192,8 @@ export const getOAuthAuthorizationContext = query({
   },
   handler: async (ctx, args) => {
     const project = await getOwnedProject(ctx, args.projectId)
-    const accountLimit = planAccountLimit(project.plan)
-    const accounts = await countProjectAccounts(ctx, args.projectId)
+    const accountLimit = getPlanLimits(project.plan).maxRedditAccounts
+    const accounts = await countActiveProjectAccounts(ctx, args.projectId)
 
     if (accounts.length >= accountLimit) {
       throw new Error("Reddit account limit reached for this plan")
@@ -223,7 +218,7 @@ export const upsertOAuthAccount = mutation({
   handler: async (ctx, args) => {
     const project = await getOwnedProject(ctx, args.projectId)
     const redditUsername = validateRedditUsername(args.redditUsername)
-    const accountLimit = planAccountLimit(project.plan)
+    const accountLimit = getPlanLimits(project.plan).maxRedditAccounts
 
     const existing = await ctx.db
       .query("redditAccounts")
@@ -237,6 +232,13 @@ export const upsertOAuthAccount = mutation({
     const now = Date.now()
 
     if (existing) {
+      if (!existing.isActive) {
+        const accounts = await countActiveProjectAccounts(ctx, args.projectId)
+        if (accounts.length >= accountLimit) {
+          throw new Error("Reddit account limit reached for this plan")
+        }
+      }
+
       await ctx.db.patch(existing._id, {
         accessToken: encryptedAccessToken,
         refreshToken: encryptedRefreshToken,
@@ -248,7 +250,7 @@ export const upsertOAuthAccount = mutation({
       return { redditAccountId: existing._id }
     }
 
-    const accounts = await countProjectAccounts(ctx, args.projectId)
+    const accounts = await countActiveProjectAccounts(ctx, args.projectId)
     if (accounts.length >= accountLimit) {
       throw new Error("Reddit account limit reached for this plan")
     }

@@ -67,6 +67,15 @@ export const checkTimezones = internalAction({
             const local = localDateAndHour(project.timezone, now)
             if (local.hour !== 7) continue
 
+            const trial = await ctx.runMutation(
+              internal.billing.expireTrialIfNeeded,
+              {
+                projectId: project._id,
+                now: now.getTime(),
+              },
+            )
+            if (trial.expired) continue
+
             await ctx.runAction(
               internal.pipeline.orchestrator.runDailyPipeline,
               {

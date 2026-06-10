@@ -9,6 +9,7 @@ const planStatus = v.union(
   v.literal("past_due"),
   v.literal("trial_expired"),
 )
+const billingInterval = v.union(v.literal("monthly"), v.literal("annual"))
 const onboardingStatus = v.union(
   v.literal("in_progress"),
   v.literal("running"),
@@ -62,6 +63,8 @@ export default defineSchema({
     trialEndsAt: v.optional(v.number()),
     creemCustomerId: v.optional(v.string()),
     creemSubscriptionId: v.optional(v.string()),
+    billingInterval: v.optional(billingInterval),
+    cancelAtPeriodEnd: v.optional(v.boolean()),
     onboardingStatus: v.optional(onboardingStatus),
     onboardingError: v.optional(v.string()),
     subredditDiscoveryStatus: v.optional(subredditDiscoveryStatus),
@@ -72,7 +75,9 @@ export default defineSchema({
   })
     .index("by_userId", ["userId"])
     .index("by_lastActiveAt", ["lastActiveAt"])
-    .index("by_planStatus", ["planStatus"]),
+    .index("by_planStatus", ["planStatus"])
+    .index("by_creemCustomerId", ["creemCustomerId"])
+    .index("by_creemSubscriptionId", ["creemSubscriptionId"]),
 
   brands: defineTable({
     projectId: v.id("projects"),

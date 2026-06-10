@@ -137,6 +137,13 @@ export const runDailyPipeline = internalAction({
     localDate: v.string(),
   },
   handler: async (ctx, args): Promise<PipelineResult> => {
+    const trial = await ctx.runMutation(internal.billing.expireTrialIfNeeded, {
+      projectId: args.projectId,
+    })
+    if (trial.expired) {
+      return { status: "skipped", skipped: true, reason: "trial_expired" }
+    }
+
     const started: RunStart = await ctx.runMutation(
       internal.pipeline.orchestrator.startPipelineRun,
       args,

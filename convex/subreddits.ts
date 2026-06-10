@@ -1,5 +1,9 @@
 import { v } from "convex/values"
 import { mutation, query } from "./_generated/server"
+import { getPlanLimits } from "./lib/planLimits"
+
+const SUBREDDIT_LIMIT_ERROR =
+  "You've reached the subreddit limit for your plan. Upgrade to add more."
 
 export const getSubreddits = query({
   args: {},
@@ -91,6 +95,20 @@ export const toggleSubreddit = mutation({
       throw new Error("QUALITY_GATE")
     }
 
+    if (args.active && !subreddit.active) {
+      const limits = getPlanLimits(project.plan)
+      const activeSubs = await ctx.db
+        .query("subreddits")
+        .withIndex("by_projectId_active", (q) =>
+          q.eq("projectId", project._id).eq("active", true)
+        )
+        .take(limits.maxSubreddits)
+
+      if (activeSubs.length >= limits.maxSubreddits) {
+        throw new Error(SUBREDDIT_LIMIT_ERROR)
+      }
+    }
+
     // If deactivating, enforce minimum 5 active
     if (!args.active) {
       const activeSubs = await ctx.db
@@ -145,6 +163,18 @@ export const addSubreddit = mutation({
       (s) => s.name.toLowerCase() === cleanName
     )
     if (isDuplicate) throw new Error("DUPLICATE")
+
+    const limits = getPlanLimits(project.plan)
+    const activeSubs = await ctx.db
+      .query("subreddits")
+      .withIndex("by_projectId_active", (q) =>
+        q.eq("projectId", project._id).eq("active", true)
+      )
+      .take(limits.maxSubreddits)
+
+    if (activeSubs.length >= limits.maxSubreddits) {
+      throw new Error(SUBREDDIT_LIMIT_ERROR)
+    }
 
     // Hardcoded scoring for now — will be replaced by AI agent
     const relevanceScore = 75

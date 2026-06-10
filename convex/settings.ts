@@ -8,10 +8,9 @@ import {
 } from "./_generated/server"
 import { internal } from "./_generated/api"
 import type { Id } from "./_generated/dataModel"
+import { getPlanLimits } from "./lib/planLimits"
 
 const profileJsonValidator = v.string()
-
-type Plan = "starter" | "growth" | "scale"
 
 async function getCurrentUser(ctx: QueryCtx | MutationCtx) {
   const identity = await ctx.auth.getUserIdentity()
@@ -50,12 +49,6 @@ async function getCurrentProject(ctx: QueryCtx) {
   if (!project) return null
 
   return { user, project }
-}
-
-function planAccountLimit(plan: Plan) {
-  if (plan === "starter") return 1
-  if (plan === "growth") return 3
-  return 5
 }
 
 async function deleteProjectRows(
@@ -155,6 +148,7 @@ export const getSettingsContext = query({
       .query("redditAccounts")
       .withIndex("by_projectId", (q) => q.eq("projectId", project._id))
       .take(20)
+    const limits = getPlanLimits(project.plan)
 
     return {
       user: {
@@ -170,7 +164,11 @@ export const getSettingsContext = query({
         onboardingStatus: project.onboardingStatus ?? null,
         onboardingError: project.onboardingError ?? null,
         trialEndsAt: project.trialEndsAt ?? null,
-        accountLimit: planAccountLimit(project.plan),
+        billingInterval: project.billingInterval ?? null,
+        cancelAtPeriodEnd: project.cancelAtPeriodEnd ?? false,
+        hasCreemCustomer: !!project.creemCustomerId,
+        accountLimit: limits.maxRedditAccounts,
+        limits,
       },
       brand: brand
         ? {

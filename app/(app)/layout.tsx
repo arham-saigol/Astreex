@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation"
 import { useQuery } from "convex/react"
 import { api } from "@/convex/_generated/api"
 
+import { BillingOverlay } from "@/components/billing-overlay"
 import { Sidebar } from "@/components/sidebar"
 
 function OnboardingGate({ children }: { children: ReactNode }) {
@@ -38,6 +39,8 @@ export default function AppLayout({ children }: { children: ReactNode }) {
 
         {/* Main content */}
         <div className="lg:pl-[240px]">
+          <BillingOverlay />
+
           {/* Spacer for mobile top bar */}
           <div className="h-12 lg:hidden" />
 
