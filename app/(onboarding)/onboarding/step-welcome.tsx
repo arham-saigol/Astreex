@@ -29,10 +29,10 @@ export function StepWelcome({ data, updateData, onNext }: Props) {
     <form onSubmit={handleSubmit} className="space-y-6">
       <div className="space-y-2 text-center">
         <h1 className="text-2xl font-semibold text-text-primary">
-          Let's set up your first project
+          Let&apos;s set up your first project
         </h1>
         <p className="text-sm text-text-secondary">
-          We'll analyze your product and find the best Reddit communities for you.
+          We&apos;ll analyze your product and find the best Reddit communities for you.
         </p>
       </div>
 

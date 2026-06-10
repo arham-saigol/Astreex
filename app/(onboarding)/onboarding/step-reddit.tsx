@@ -49,7 +49,7 @@ export function StepReddit({
           Connect your Reddit accounts
         </h1>
         <p className="text-sm text-text-secondary">
-          We'll post approved content on your behalf. Add at least one account.
+          We&apos;ll post approved content on your behalf. Add at least one account.
         </p>
       </div>
 
@@ -129,7 +129,7 @@ export function StepReddit({
           disabled={isSubmitting}
           className="text-xs text-text-tertiary underline-offset-2 transition-colors hover:text-text-secondary hover:underline disabled:opacity-50"
         >
-          Skip for now — I'll connect later
+          Skip for now — I&apos;ll connect later
         </button>
       </div>
     </div>

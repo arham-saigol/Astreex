@@ -23,8 +23,10 @@ type RedditMeResponse = {
   name?: string
 }
 
-function badRequest(message: string) {
-  const response = new NextResponse(message, { status: 400 })
+function badRequest(request: NextRequest, returnTo: ReturnType<typeof safeReturnTo>, message: string) {
+  const response = NextResponse.redirect(
+    errorRedirectTarget(request, returnTo, message),
+  )
   clearOAuthCookies(response)
   return response
 }
@@ -101,11 +103,11 @@ export async function GET(request: NextRequest) {
   const redditError = request.nextUrl.searchParams.get("error")
 
   if (!cookieState || !state || cookieState !== state) {
-    return badRequest("Invalid OAuth state")
+    return badRequest(request, returnTo, "Invalid OAuth state")
   }
 
   if (!cookieProjectId) {
-    return badRequest("Missing OAuth project")
+    return badRequest(request, returnTo, "Missing OAuth project")
   }
 
   if (redditError) {
@@ -117,7 +119,7 @@ export async function GET(request: NextRequest) {
   }
 
   if (!code) {
-    return badRequest("Missing OAuth code")
+    return badRequest(request, returnTo, "Missing OAuth code")
   }
 
   const { client, response } = await getAuthedConvexClient(request)

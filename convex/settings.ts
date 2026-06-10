@@ -163,6 +163,7 @@ export const getSettingsContext = query({
         planStatus: project.planStatus,
         onboardingStatus: project.onboardingStatus ?? null,
         onboardingError: project.onboardingError ?? null,
+        createdAt: project.createdAt,
         trialEndsAt: project.trialEndsAt ?? null,
         billingInterval: project.billingInterval ?? null,
         cancelAtPeriodEnd: project.cancelAtPeriodEnd ?? false,

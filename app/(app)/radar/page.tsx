@@ -9,6 +9,7 @@ import { Plus, X } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { Skeleton } from "@/components/ui/skeleton"
 
 // ---------- Helpers ----------
 
@@ -447,10 +448,10 @@ export default function RadarPage() {
               key={i}
               className="flex h-14 items-center gap-3 rounded-lg px-3"
             >
-              <div className="size-2 animate-pulse rounded-full bg-muted" />
-              <div className="h-4 w-28 animate-pulse rounded bg-muted" />
-              <div className="ml-auto h-3.5 w-16 animate-pulse rounded bg-muted" />
-              <div className="h-5 w-9 animate-pulse rounded-full bg-muted" />
+              <Skeleton className="size-2 rounded-full" />
+              <Skeleton className="h-4 w-28" />
+              <Skeleton className="ml-auto h-3.5 w-16" />
+              <Skeleton className="h-5 w-9 rounded-full" />
             </div>
           ))}
         </div>
@@ -478,9 +479,12 @@ export default function RadarPage() {
           <AddSubredditInput onDone={() => setShowAddInput(false)} />
         )}
         <ManualSubredditNotice status={radarStatus} />
-        <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-border py-16 text-center">
-          <p className="text-sm text-text-secondary">
-            Your subreddits will appear here once onboarding analysis completes.
+        <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-border px-6 py-16 text-center">
+          <p className="text-sm font-medium text-text-primary">
+            Setting up your subreddits...
+          </p>
+          <p className="mt-2 max-w-md text-sm text-text-secondary">
+            This usually takes a few minutes after onboarding. Refresh the page if it&apos;s been more than 10 minutes.
           </p>
         </div>
       </div>

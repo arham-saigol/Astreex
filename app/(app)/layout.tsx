@@ -6,6 +6,8 @@ import { useQuery } from "convex/react"
 import { api } from "@/convex/_generated/api"
 
 import { BillingOverlay } from "@/components/billing-overlay"
+import { AppShellEffects } from "@/components/app-shell-effects"
+import { NotificationBanner } from "@/components/notification-banner"
 import { Sidebar } from "@/components/sidebar"
 
 function OnboardingGate({ children }: { children: ReactNode }) {
@@ -36,6 +38,7 @@ export default function AppLayout({ children }: { children: ReactNode }) {
     <OnboardingGate>
       <div className="min-h-screen bg-background">
         <Sidebar />
+        <AppShellEffects />
 
         {/* Main content */}
         <div className="lg:pl-[240px]">
@@ -45,6 +48,7 @@ export default function AppLayout({ children }: { children: ReactNode }) {
           <div className="h-12 lg:hidden" />
 
           <main className="mx-auto max-w-4xl px-6 py-6">
+            <NotificationBanner />
             {children}
           </main>
         </div>

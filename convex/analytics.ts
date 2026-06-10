@@ -8,7 +8,7 @@ import {
   type QueryCtx,
 } from "./_generated/server"
 import { internal } from "./_generated/api"
-import type { Id } from "./_generated/dataModel"
+import type { Doc, Id } from "./_generated/dataModel"
 
 const timeframeValidator = v.union(
   v.literal("7d"),
@@ -54,27 +54,49 @@ function cutoffForTimeframe(timeframe: Timeframe) {
   return 0
 }
 
-function mockTrendData(timeframe: Timeframe) {
-  // MOCK DATA: Replace with postedContent aggregation once real analytics data exists.
-  const values = timeframe === "7d"
-    ? [12, 18, 31, 22, 45, 38, 52]
-    : [12, 18, 31, 22, 45, 38, 52, 47]
+function formatPeriod(timestamp: number, timeframe: Timeframe) {
+  const date = new Date(timestamp)
 
+  return date.toLocaleDateString("en-US", {
+    month: "short",
+    day: timeframe === "all" ? undefined : "numeric",
+    year: timeframe === "all" ? "numeric" : undefined,
+  })
+}
+
+function emptyTrendData(timeframe: Timeframe) {
+  const points = timeframe === "7d" ? 7 : 8
   const bucketSize = timeframe === "7d" ? DAY : 7 * DAY
   const now = Date.now()
 
-  return values.map((karma, index) => {
-    const bucketsFromEnd = values.length - index - 1
-    const date = new Date(now - bucketsFromEnd * bucketSize)
-
+  return Array.from({ length: points }, (_, index) => {
+    const bucketsFromEnd = points - index - 1
     return {
-      period: date.toLocaleDateString("en-US", {
-        month: "short",
-        day: "numeric",
-      }),
-      karma,
+      period: formatPeriod(now - bucketsFromEnd * bucketSize, timeframe),
+      karma: 0,
     }
   })
+}
+
+function healthRank(status: Doc<"redditAccounts">["healthStatus"]) {
+  if (status === "banned") return 2
+  if (status === "warning") return 1
+  return 0
+}
+
+async function getPostedContent(
+  ctx: QueryCtx,
+  projectId: Id<"projects">,
+  timeframe: Timeframe,
+) {
+  const cutoff = cutoffForTimeframe(timeframe)
+  return await ctx.db
+    .query("postedContent")
+    .withIndex("by_projectId_and_createdAt", (q) =>
+      q.eq("projectId", projectId).gte("createdAt", cutoff),
+    )
+    .order("desc")
+    .take(500)
 }
 
 export const getDashboardContext = query({
@@ -103,14 +125,45 @@ export const getDashboardMetrics = query({
   },
   handler: async (ctx, args) => {
     await getOwnedProject(ctx, args.projectId)
-    cutoffForTimeframe(args.timeframe)
 
-    // MOCK DATA: Replace with cards and postedContent aggregation.
+    const cutoff = cutoffForTimeframe(args.timeframe)
+    const postedContent = await getPostedContent(ctx, args.projectId, args.timeframe)
+    const reviewedCards = await ctx.db
+      .query("cards")
+      .withIndex("by_projectId_and_createdAt", (q) =>
+        q.eq("projectId", args.projectId).gte("createdAt", cutoff),
+      )
+      .order("desc")
+      .take(500)
+    const accounts = await ctx.db
+      .query("redditAccounts")
+      .withIndex("by_projectId", (q) => q.eq("projectId", args.projectId))
+      .take(50)
+
+    const decidedCards = reviewedCards.filter(
+      (card) => card.status !== "pending" && card.status !== "expired",
+    )
+    const approvedCards = reviewedCards.filter((card) =>
+      card.status === "scheduled" ||
+      card.status === "posted" ||
+      card.status === "approved",
+    )
+    const worstHealth = accounts.reduce(
+      (current, account) =>
+        healthRank(account.healthStatus) > healthRank(current)
+          ? account.healthStatus
+          : current,
+      "healthy" as Doc<"redditAccounts">["healthStatus"],
+    )
+
     return {
-      postsCount: 24,
-      approvalRate: 89,
-      karmaEarned: 147,
-      healthStatus: "healthy" as const,
+      postsCount: postedContent.length,
+      approvalRate:
+        decidedCards.length === 0
+          ? 0
+          : Math.round((approvedCards.length / decidedCards.length) * 100),
+      karmaEarned: postedContent.reduce((sum, item) => sum + item.score, 0),
+      healthStatus: worstHealth,
     }
   },
 })
@@ -122,91 +175,25 @@ export const getRecentActivity = query({
   },
   handler: async (ctx, args) => {
     await getOwnedProject(ctx, args.projectId)
-    cutoffForTimeframe(args.timeframe)
+    const postedContent = await getPostedContent(ctx, args.projectId, args.timeframe)
 
-    // MOCK DATA: Replace with postedContent joined to cards/surfacedPosts.
-    return [
-      {
-        id: "activity-1",
-        subreddit: "SaaS",
-        title: "How to handle positioning when every competitor sounds the same",
-        score: 47,
-        postedAt: Date.now() - 2 * HOUR,
-        permalink: "https://www.reddit.com/r/SaaS/",
-      },
-      {
-        id: "activity-2",
-        subreddit: "startups",
-        title: "Best tools for founder-led distribution without a content team",
-        score: 31,
-        postedAt: Date.now() - 4 * HOUR,
-        permalink: "https://www.reddit.com/r/startups/",
-      },
-      {
-        id: "activity-3",
-        subreddit: "indiehackers",
-        title: "Original post",
-        score: 28,
-        postedAt: Date.now() - 1 * DAY,
-        permalink: "https://www.reddit.com/r/indiehackers/",
-      },
-      {
-        id: "activity-4",
-        subreddit: "entrepreneur",
-        title: "Here's what changed after we stopped posting launch threads",
-        score: 22,
-        postedAt: Date.now() - 2 * DAY,
-        permalink: "https://www.reddit.com/r/entrepreneur/",
-      },
-      {
-        id: "activity-5",
-        subreddit: "B2BMarketing",
-        title: "The quiet channel that beat our paid acquisition test",
-        score: 18,
-        postedAt: Date.now() - 3 * DAY,
-        permalink: "https://www.reddit.com/r/B2BMarketing/",
-      },
-      {
-        id: "activity-6",
-        subreddit: "smallbusiness",
-        title: "What should a solo founder automate first",
-        score: 14,
-        postedAt: Date.now() - 4 * DAY,
-        permalink: "https://www.reddit.com/r/smallbusiness/",
-      },
-      {
-        id: "activity-7",
-        subreddit: "marketing",
-        title: "We found better leads by answering niche threads",
-        score: 12,
-        postedAt: Date.now() - 5 * DAY,
-        permalink: "https://www.reddit.com/r/marketing/",
-      },
-      {
-        id: "activity-8",
-        subreddit: "sales",
-        title: "Cold outbound versus community replies for early B2B",
-        score: 9,
-        postedAt: Date.now() - 6 * DAY,
-        permalink: "https://www.reddit.com/r/sales/",
-      },
-      {
-        id: "activity-9",
-        subreddit: "ProductManagement",
-        title: "How do you validate pain before building",
-        score: 6,
-        postedAt: Date.now() - 8 * DAY,
-        permalink: "https://www.reddit.com/r/ProductManagement/",
-      },
-      {
-        id: "activity-10",
-        subreddit: "founders",
-        title: "The first channel that made our demo calendar predictable",
-        score: 5,
-        postedAt: Date.now() - 10 * DAY,
-        permalink: "https://www.reddit.com/r/founders/",
-      },
-    ]
+    return await Promise.all(
+      postedContent.slice(0, 10).map(async (item) => {
+        const card = await ctx.db.get(item.cardId)
+
+        return {
+          id: item._id,
+          subreddit: item.subreddit,
+          title:
+            card?.type === "original"
+              ? (card.editedContent ?? card.draftContent).split("\n")[0] || "Original post"
+              : card?.draftContent ?? "Reddit reply",
+          score: item.score,
+          postedAt: item.createdAt,
+          permalink: item.permalink ?? `https://www.reddit.com/r/${item.subreddit}/`,
+        }
+      }),
+    )
   },
 })
 
@@ -217,9 +204,20 @@ export const getTrendData = query({
   },
   handler: async (ctx, args) => {
     await getOwnedProject(ctx, args.projectId)
-    cutoffForTimeframe(args.timeframe)
+    const postedContent = await getPostedContent(ctx, args.projectId, args.timeframe)
+    const base = emptyTrendData(args.timeframe)
+    if (postedContent.length === 0) return base
 
-    return mockTrendData(args.timeframe)
+    const buckets = new Map(base.map((point) => [point.period, point.karma]))
+    for (const item of postedContent) {
+      const period = formatPeriod(item.createdAt, args.timeframe)
+      buckets.set(period, (buckets.get(period) ?? 0) + item.score)
+    }
+
+    return base.map((point) => ({
+      ...point,
+      karma: buckets.get(point.period) ?? 0,
+    }))
   },
 })
 
@@ -230,41 +228,21 @@ export const getBestPerforming = query({
   },
   handler: async (ctx, args) => {
     await getOwnedProject(ctx, args.projectId)
-    cutoffForTimeframe(args.timeframe)
+    const postedContent = await getPostedContent(ctx, args.projectId, args.timeframe)
+    const best = [...postedContent].sort((a, b) => b.score - a.score).slice(0, 5)
 
-    // MOCK DATA: Replace with postedContent sorted by score.
-    return [
-      {
-        id: "best-1",
-        subreddit: "SaaS",
-        score: 47,
-        snippet: "We struggled with the same positioning problem until we mapped each reply to one specific buyer objection.",
-      },
-      {
-        id: "best-2",
-        subreddit: "startups",
-        score: 31,
-        snippet: "The key insight for us was treating Reddit as support-led discovery, not a place to broadcast launches.",
-      },
-      {
-        id: "best-3",
-        subreddit: "entrepreneur",
-        score: 28,
-        snippet: "Here's what changed once we stopped chasing broad founder communities and focused on narrow workflows.",
-      },
-      {
-        id: "best-4",
-        subreddit: "indiehackers",
-        score: 24,
-        snippet: "Original post: A simple checklist for finding high-intent Reddit threads before competitors answer them.",
-      },
-      {
-        id: "best-5",
-        subreddit: "B2BMarketing",
-        score: 19,
-        snippet: "The durable channel was not more content; it was showing up in the exact threads prospects already trusted.",
-      },
-    ]
+    return await Promise.all(
+      best.map(async (item) => {
+        const card = await ctx.db.get(item.cardId)
+
+        return {
+          id: item._id,
+          subreddit: item.subreddit,
+          score: item.score,
+          snippet: card?.editedContent ?? card?.draftContent ?? "Posted content",
+        }
+      }),
+    )
   },
 })
 

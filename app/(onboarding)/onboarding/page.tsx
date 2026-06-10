@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from "react"
 import { useRouter } from "next/navigation"
 import { useMutation, useQuery } from "convex/react"
 import { motion, AnimatePresence } from "framer-motion"
+import { toast } from "sonner"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import { StepWelcome } from "./step-welcome"
@@ -57,23 +58,29 @@ export default function OnboardingPage() {
   useEffect(() => {
     const searchParams = new URLSearchParams(window.location.search)
     if (searchParams.get("step") === "4") {
-      setStep(4)
+      queueMicrotask(() => setStep(4))
+    }
+    if (searchParams.get("reddit_error")) {
+      toast.error("Reddit connection failed. Please try again.")
+      window.history.replaceState(null, "", "/onboarding?step=4")
     }
   }, [])
 
   useEffect(() => {
     if (!draft) return
 
-    setData((prev) => ({
-      ...prev,
-      projectId: draft.projectId,
-      projectName: draft.projectName,
-      websiteUrl: draft.websiteUrl,
-      competitorUrl: draft.competitorUrl,
-      plan: draft.plan,
-      timezone: draft.timezone,
-      redditAccounts: draft.redditAccounts,
-    }))
+    queueMicrotask(() => {
+      setData((prev) => ({
+        ...prev,
+        projectId: draft.projectId,
+        projectName: draft.projectName,
+        websiteUrl: draft.websiteUrl,
+        competitorUrl: draft.competitorUrl,
+        plan: draft.plan,
+        timezone: draft.timezone,
+        redditAccounts: draft.redditAccounts,
+      }))
+    })
   }, [draft])
 
   const goNext = useCallback(() => {

@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server"
 
 import type { Id } from "@/convex/_generated/dataModel"
 import {
+  errorRedirectTarget,
   getAuthedConvexClient,
   oauthCookieNames,
   oauthCookieOptions,
@@ -20,14 +21,19 @@ function randomState() {
 export async function GET(request: NextRequest) {
   const clientId = process.env.REDDIT_CLIENT_ID
   const redirectUri = process.env.REDDIT_REDIRECT_URI
+  const returnTo = safeReturnTo(request.nextUrl.searchParams.get("returnTo"))
 
   if (!clientId || !redirectUri) {
-    return new NextResponse("Reddit OAuth is not configured", { status: 500 })
+    return NextResponse.redirect(
+      errorRedirectTarget(request, returnTo, "Reddit OAuth is not configured"),
+    )
   }
 
   const projectId = request.nextUrl.searchParams.get("projectId")
   if (!projectId) {
-    return new NextResponse("Missing projectId", { status: 400 })
+    return NextResponse.redirect(
+      errorRedirectTarget(request, returnTo, "Missing projectId"),
+    )
   }
 
   const { client, response } = await getAuthedConvexClient(request)
@@ -37,10 +43,9 @@ export async function GET(request: NextRequest) {
     await verifyOAuthProject(client, projectId as Id<"projects">)
   } catch (error) {
     const message = error instanceof Error ? error.message : "Project is not authorized"
-    return new NextResponse(message, { status: 403 })
+    return NextResponse.redirect(errorRedirectTarget(request, returnTo, message))
   }
 
-  const returnTo = safeReturnTo(request.nextUrl.searchParams.get("returnTo"))
   const state = randomState()
   const redditUrl = new URL("https://www.reddit.com/api/v1/authorize")
   redditUrl.searchParams.set("client_id", clientId)

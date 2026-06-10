@@ -23,12 +23,29 @@ const commitMono = Geist_Mono({
   display: "swap",
 })
 
+const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000"
+
 export const metadata: Metadata = {
+  metadataBase: new URL(appUrl),
   title: {
-    default: "Astreex",
+    default: "Astreex - Reddit Growth on Autopilot",
     template: "%s | Astreex",
   },
-  description: "Astreex is a Reddit distribution automation workspace for B2B founders.",
+  description:
+    "Daily AI-curated Reddit posts and replies for founders. Approve in 5 minutes, post automatically.",
+  openGraph: {
+    title: "Astreex - Reddit Growth on Autopilot",
+    description:
+      "Daily AI-curated Reddit posts and replies for founders. Approve in 5 minutes, post automatically.",
+    images: [
+      {
+        url: "/opengraph-image",
+        width: 1200,
+        height: 630,
+        alt: "Astreex",
+      },
+    ],
+  },
 }
 
 export default function RootLayout({

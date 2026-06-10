@@ -130,17 +130,20 @@ function MetricCard({
   value,
   isShimmering,
   healthStatus,
+  mutedValue,
 }: {
   label: string
   value: string | number
   isShimmering?: boolean
   healthStatus?: HealthStatus
+  mutedValue?: boolean
 }) {
   return (
     <div className="rounded-lg border border-border bg-surface p-4">
       <div
         className={cn(
           "flex min-h-9 items-center gap-2 font-mono text-[28px] font-semibold leading-none text-text-primary",
+          mutedValue && "text-text-tertiary",
           isShimmering && "animate-pulse",
         )}
       >
@@ -205,10 +208,12 @@ function TrendChart({
   data: Array<{ period: string; karma: number }>
   isShimmering?: boolean
 }) {
+  const isEmpty = data.every((point) => point.karma === 0)
+
   return (
     <div
       className={cn(
-        "h-[300px] rounded-lg border border-border bg-surface px-2 py-4",
+        "relative h-[300px] rounded-lg border border-border bg-surface px-2 py-4",
         isShimmering && "animate-pulse",
       )}
     >
@@ -249,6 +254,13 @@ function TrendChart({
           />
         </LineChart>
       </ResponsiveContainer>
+      {isEmpty ? (
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center px-4">
+          <p className="rounded-full bg-surface/85 px-3 py-1 text-[13px] text-text-tertiary">
+            Data appears after your first week
+          </p>
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -267,6 +279,14 @@ function ActivityList({
   }>
   isShimmering?: boolean
 }) {
+  if (items.length === 0) {
+    return (
+      <div className="rounded-lg border border-dashed border-border p-6 text-center text-[14px] text-text-secondary">
+        No posted content yet. Approve your first cards to see activity here.
+      </div>
+    )
+  }
+
   return (
     <div className="space-y-2">
       {items.map((item) => (
@@ -314,6 +334,14 @@ function BestPerformingList({
   }>
   isShimmering?: boolean
 }) {
+  if (items.length === 0) {
+    return (
+      <div className="rounded-lg border border-dashed border-border p-6 text-center text-[14px] text-text-secondary">
+        Best-performing posts appear after your first posts are live.
+      </div>
+    )
+  }
+
   return (
     <ol className="space-y-3">
       {items.map((item, index) => (
@@ -440,12 +468,21 @@ export default function DashboardPage() {
       </header>
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <MetricCard label="Posts" value={metrics.postsCount} />
-        <MetricCard label="Approval rate" value={`${metrics.approvalRate}%`} />
+        <MetricCard
+          label="Posts"
+          value={metrics.postsCount}
+          mutedValue={metrics.postsCount === 0}
+        />
+        <MetricCard
+          label="Approval rate"
+          value={`${metrics.approvalRate}%`}
+          mutedValue={metrics.approvalRate === 0}
+        />
         <MetricCard
           label="Karma earned"
           value={`+${metrics.karmaEarned}`}
           isShimmering={showRefreshShimmer}
+          mutedValue={metrics.karmaEarned === 0}
         />
         <MetricCard
           label="Account health"

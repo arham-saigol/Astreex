@@ -1,6 +1,6 @@
 "use client"
 
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import { useClerk, useUser } from "@clerk/nextjs"
 import { useMutation, useQuery } from "convex/react"
@@ -71,6 +71,7 @@ type SettingsContext = {
     planStatus: PlanStatus
     onboardingStatus: OnboardingStatus | null
     onboardingError: string | null
+    createdAt: number
     trialEndsAt: number | null
     billingInterval: "monthly" | "annual" | null
     cancelAtPeriodEnd: boolean
@@ -621,6 +622,7 @@ function BrandTab({
   const [competitorUrl, setCompetitorUrl] = useState(context.brand?.competitorUrl ?? "")
   const [savingUrls, setSavingUrls] = useState(false)
   const [retryingPipeline, setRetryingPipeline] = useState(false)
+  const [now] = useState(() => Date.now())
 
   const profileChanged = JSON.stringify(draft) !== JSON.stringify(profile)
   const urlsChanged =
@@ -628,6 +630,8 @@ function BrandTab({
     competitorUrl.trim() !== (context.brand?.competitorUrl ?? "")
   const websiteChanged = websiteUrl.trim() !== (context.brand?.websiteUrl ?? "")
   const isEmptyProfile = JSON.stringify(profile) === JSON.stringify(emptyProfile)
+  const profileAge = now - context.project.createdAt
+  const profileIsLate = profileAge > 30 * 60 * 1000
 
   const setTextField = (field: keyof BrandProfile, value: string) => {
     setDraft((current) => ({
@@ -689,8 +693,24 @@ function BrandTab({
 
   if (!context.brand) {
     return (
-      <div className="rounded-xl border border-dashed border-border p-8 text-center text-[14px] text-text-secondary">
-        Brand profile will appear here after onboarding creates a project brand.
+      <div className="space-y-4 rounded-xl border border-dashed border-border p-8 text-center text-[14px] text-text-secondary">
+        <p>
+          {profileIsLate
+            ? "Something went wrong. Click to retry."
+            : "Your brand profile is being generated. This usually takes a few minutes."}
+        </p>
+        {profileIsLate ? (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={retryPipeline}
+            disabled={retryingPipeline}
+          >
+            <RefreshCw className="size-3.5" />
+            {retryingPipeline ? "Retrying..." : "Retry"}
+          </Button>
+        ) : null}
       </div>
     )
   }
@@ -723,8 +743,22 @@ function BrandTab({
           ) : null}
           {isEmptyProfile ? (
             <p className="rounded-lg bg-muted p-3 text-[13px] text-text-secondary">
-              No generated brand profile yet. Add details below or regenerate after analysis completes.
+              {profileIsLate
+                ? "Something went wrong. Click to retry."
+                : "Your brand profile is being generated. This usually takes a few minutes."}
             </p>
+          ) : null}
+          {isEmptyProfile && profileIsLate ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={retryPipeline}
+              disabled={retryingPipeline}
+            >
+              <RefreshCw className="size-3.5" />
+              {retryingPipeline ? "Retrying..." : "Retry"}
+            </Button>
           ) : null}
           <dl className="space-y-1">
             <ProfileField
@@ -1041,10 +1075,25 @@ function BillingTab({
 
 export default function SettingsPage() {
   const searchParams = useSearchParams()
+  const router = useRouter()
   const [activeTab, setActiveTab] = useState<Tab>(
-    searchParams.get("tab") === "billing" ? "billing" : "account",
+    searchParams.get("tab") === "billing"
+      ? "billing"
+      : searchParams.get("tab") === "brand"
+        ? "brand"
+        : "account",
   )
   const context = useQuery(api.settings.getSettingsContext)
+
+  useEffect(() => {
+    if (searchParams.get("reddit_error")) {
+      toast.error("Reddit connection failed. Please try again.")
+      router.replace("/settings", { scroll: false })
+    } else if (searchParams.get("reddit_connected")) {
+      toast.success("Reddit account connected.")
+      router.replace("/settings", { scroll: false })
+    }
+  }, [router, searchParams])
 
   if (context === undefined) {
     return <SettingsSkeleton />

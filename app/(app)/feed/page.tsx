@@ -1,15 +1,21 @@
 "use client"
 
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useRef, useState, type ReactElement } from "react"
 import { useMutation, useQuery } from "convex/react"
 import { AnimatePresence, motion, useMotionValue, useTransform } from "framer-motion"
-import { Check, X } from "lucide-react"
+import { Check, Sparkles, X } from "lucide-react"
+import { toast } from "sonner"
 
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 
 // ---------------------------------------------------------------------------
 // Types
@@ -82,14 +88,62 @@ function CardSkeleton() {
 // Empty State
 // ---------------------------------------------------------------------------
 
-function EmptyState() {
+function PipelineNotice() {
   return (
-    <div className="flex flex-col items-center justify-center py-24 text-center">
-      <p className="font-serif text-xl text-text-primary">No cards yet.</p>
-      <p className="mt-2 max-w-sm font-serif text-base text-text-secondary">
-        Your first batch will be ready tomorrow morning after we analyze your subreddits.
-      </p>
+    <p className="mb-5 rounded-lg border border-border bg-muted/60 px-3 py-2 text-center text-[13px] text-text-secondary">
+      We couldn&apos;t generate cards today. This occasionally happens and will resolve tomorrow.
+    </p>
+  )
+}
+
+function EmptyState({ pipelineFailedToday }: { pipelineFailedToday?: boolean }) {
+  return (
+    <div className="py-24">
+      {pipelineFailedToday ? <PipelineNotice /> : null}
+      <div className="flex flex-col items-center justify-center text-center">
+        <div className="mb-5 flex size-12 items-center justify-center rounded-full bg-accent-subtle">
+          <Sparkles className="size-5 text-accent" strokeWidth={1.7} />
+        </div>
+        <p className="font-serif text-2xl font-medium text-text-primary">
+          Your first cards are being prepared.
+        </p>
+        <p className="mt-3 max-w-md text-[15px] leading-6 text-text-secondary">
+          We&apos;re analyzing your subreddits and will have recommendations ready by tomorrow morning.
+        </p>
+      </div>
     </div>
+  )
+}
+
+function ShortcutButton({
+  children,
+  shortcut,
+}: {
+  children: ReactElement
+  shortcut: string
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger render={children} />
+      <TooltipContent>
+        {shortcut}
+      </TooltipContent>
+    </Tooltip>
+  )
+}
+
+function EditHint() {
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <span className="cursor-help text-xs text-text-tertiary">
+            E to edit
+          </span>
+        }
+      />
+      <TooltipContent>E to edit</TooltipContent>
+    </Tooltip>
   )
 }
 
@@ -222,18 +276,6 @@ function SwipeCard({
   const [editedBody, setEditedBody] = useState(
     card.type === "original" ? card.draftContent.split("\n").slice(1).join("\n") : ""
   )
-
-  // Reset edit state when card changes
-  useEffect(() => {
-    setEditMode(false)
-    if (card.type === "reply") {
-      setEditedContent(card.draftContent)
-    } else {
-      const lines = card.draftContent.split("\n")
-      setEditedTitle(lines[0] ?? "")
-      setEditedBody(lines.slice(1).join("\n"))
-    }
-  }, [card._id, card.draftContent, card.type])
 
   // Keyboard shortcut for E key
   useEffect(() => {
@@ -480,6 +522,7 @@ function OriginalCardContent({
 
 export default function FeedPage() {
   const cards = useQuery(api.cards.getActiveCards)
+  const feedStatus = useQuery(api.cards.getFeedStatus)
   const approveCard = useMutation(api.cards.approveCard)
   const declineCard = useMutation(api.cards.declineCard)
 
@@ -495,7 +538,7 @@ export default function FeedPage() {
 
   // Empty state
   if (cards.length === 0) {
-    return <EmptyState />
+    return <EmptyState pipelineFailedToday={feedStatus?.pipelineFailedToday} />
   }
 
   const totalCards = cards.length
@@ -520,6 +563,8 @@ export default function FeedPage() {
     approveCard({
       cardId: currentCard._id,
       editedContent: editedContent,
+    }).catch(() => {
+      toast.error("Card approval failed. Please try again.")
     })
 
     // Advance after animation
@@ -537,7 +582,9 @@ export default function FeedPage() {
     setDecisions((prev) => [...prev, "declined"])
 
     // Optimistic — fire mutation in background
-    declineCard({ cardId: currentCard._id })
+    declineCard({ cardId: currentCard._id }).catch(() => {
+      toast.error("Card decline failed. Please try again.")
+    })
 
     // Advance after animation
     setTimeout(() => {
@@ -622,31 +669,37 @@ function FeedContent({
 
       {/* Action buttons */}
       <div className="mt-6 flex w-full max-w-[560px] items-center justify-between px-4">
-        <Button
-          variant="ghost"
-          size="lg"
-          onClick={onDecline}
-          disabled={isExiting}
-          className="gap-1.5 text-text-secondary"
-        >
-          <X className="h-4 w-4" />
-          Decline
-        </Button>
-        <Button
-          size="lg"
-          onClick={() => onApprove()}
-          disabled={isExiting}
-          className="gap-1.5"
-        >
-          <Check className="h-4 w-4" />
-          Approve
-        </Button>
+        <ShortcutButton shortcut="Left arrow to decline">
+          <Button
+            variant="ghost"
+            size="lg"
+            onClick={onDecline}
+            disabled={isExiting}
+            className="gap-1.5 text-text-secondary"
+          >
+            <X className="h-4 w-4" />
+            Decline
+          </Button>
+        </ShortcutButton>
+        <ShortcutButton shortcut="Right arrow to approve">
+          <Button
+            size="lg"
+            onClick={() => onApprove()}
+            disabled={isExiting}
+            className="gap-1.5"
+          >
+            <Check className="h-4 w-4" />
+            Approve
+          </Button>
+        </ShortcutButton>
       </div>
 
       {/* Keyboard hint */}
-      <p className="mt-6 text-xs text-text-tertiary">
-        ← → to swipe · E to edit
-      </p>
+      <div className="mt-6 flex items-center gap-2 text-xs text-text-tertiary">
+        <span>Left/right arrows to swipe</span>
+        <span aria-hidden="true">·</span>
+        <EditHint />
+      </div>
     </div>
   )
 }

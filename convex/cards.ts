@@ -4,7 +4,6 @@ import type { Id } from "./_generated/dataModel"
 import { internalMutation, mutation, query, type MutationCtx } from "./_generated/server"
 
 const FIVE_MINUTES_MS = 5 * 60 * 1000
-const TEN_MINUTES_MS = 10 * 60 * 1000
 
 function localDateParts(timeZone: string, date: Date) {
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -139,6 +138,39 @@ export const getActiveCards = query({
     )
 
     return enrichedCards
+  },
+})
+
+export const getFeedStatus = query({
+  args: {},
+  handler: async (ctx) => {
+    const identity = await ctx.auth.getUserIdentity()
+    if (!identity) return null
+
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_clerkId", (q) => q.eq("clerkId", identity.subject))
+      .unique()
+    if (!user) return null
+
+    const project = await ctx.db
+      .query("projects")
+      .withIndex("by_userId", (q) => q.eq("userId", user._id))
+      .first()
+    if (!project) return null
+
+    const today = localDateParts(project.timezone, new Date())
+    const localDate = `${today.year}-${String(today.month).padStart(2, "0")}-${String(today.day).padStart(2, "0")}`
+    const pipelineRun = await ctx.db
+      .query("pipelineRuns")
+      .withIndex("by_projectId_and_localDate", (q) =>
+        q.eq("projectId", project._id).eq("localDate", localDate),
+      )
+      .first()
+
+    return {
+      pipelineFailedToday: pipelineRun?.status === "failed",
+    }
   },
 })
 
