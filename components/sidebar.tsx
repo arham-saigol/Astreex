@@ -20,6 +20,7 @@ import { useTheme } from "next-themes"
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { TrialCard } from "@/components/trial-card"
 import { cn } from "@/lib/utils"
 
 const navItems = [
@@ -144,7 +145,8 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
       </nav>
 
       {/* Profile */}
-      <div className="border-t border-border px-2 py-3">
+      <div className="space-y-3 border-t border-border px-2 py-3">
+        <TrialCard />
         <ProfileMenu />
       </div>
     </div>
