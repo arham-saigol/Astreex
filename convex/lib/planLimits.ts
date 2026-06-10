@@ -43,3 +43,16 @@ const LIMITS: Record<Plan, PipelineLimits> = {
 export function getPipelineLimits(plan: Plan) {
   return LIMITS[plan]
 }
+
+export function getSubredditDiscoveryLimits(plan: string) {
+  switch (plan) {
+    case "starter":
+      return { discoverCount: 15, activeCount: 10 }
+    case "growth":
+      return { discoverCount: 30, activeCount: 25 }
+    case "scale":
+      return { discoverCount: 50, activeCount: 45 }
+    default:
+      return { discoverCount: 15, activeCount: 10 }
+  }
+}

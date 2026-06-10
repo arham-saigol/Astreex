@@ -1,4 +1,5 @@
 import { v } from "convex/values"
+import { internal } from "./_generated/api"
 import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server"
 import type { Doc, Id } from "./_generated/dataModel"
 
@@ -246,9 +247,14 @@ export const completeOnboarding = mutation({
     const sevenDays = 7 * 24 * 60 * 60 * 1000
 
     await ctx.db.patch(projectId, {
-      onboardingStatus: "complete",
+      onboardingStatus: "running",
+      onboardingError: undefined,
       trialEndsAt: now + sevenDays,
       lastActiveAt: now,
+    })
+
+    await ctx.scheduler.runAfter(0, internal.onboarding.pipeline.runOnboardingPipeline, {
+      projectId,
     })
 
     return { projectId }

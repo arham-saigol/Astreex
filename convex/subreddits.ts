@@ -34,6 +34,32 @@ export const getSubreddits = query({
   },
 })
 
+export const getRadarStatus = query({
+  args: {},
+  handler: async (ctx) => {
+    const identity = await ctx.auth.getUserIdentity()
+    if (!identity) return null
+
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_clerkId", (q) => q.eq("clerkId", identity.subject))
+      .unique()
+    if (!user) return null
+
+    const project = await ctx.db
+      .query("projects")
+      .withIndex("by_userId", (q) => q.eq("userId", user._id))
+      .first()
+    if (!project) return null
+
+    return {
+      onboardingStatus: project.onboardingStatus ?? null,
+      onboardingError: project.onboardingError ?? null,
+      subredditDiscoveryStatus: project.subredditDiscoveryStatus ?? null,
+    }
+  },
+})
+
 export const toggleSubreddit = mutation({
   args: {
     subredditId: v.id("subreddits"),

@@ -52,6 +52,12 @@ type Subreddit = {
   createdAt: number
 }
 
+type RadarStatus = {
+  onboardingStatus: "in_progress" | "running" | "complete" | "error" | null
+  onboardingError: string | null
+  subredditDiscoveryStatus: "complete" | "needs_manual_subreddits" | null
+} | null
+
 // ---------- Components ----------
 
 function Toggle({
@@ -340,10 +346,21 @@ function AddSubredditInput({ onDone }: { onDone: () => void }) {
   )
 }
 
+function ManualSubredditNotice({ status }: { status: RadarStatus | undefined }) {
+  if (status?.subredditDiscoveryStatus !== "needs_manual_subreddits") return null
+
+  return (
+    <p className="rounded-lg border border-border bg-muted/60 p-3 text-sm text-text-secondary">
+      We need more info to build your radar. Add a few relevant subreddits manually to start daily recommendations.
+    </p>
+  )
+}
+
 // ---------- Main Page ----------
 
 export default function RadarPage() {
   const subreddits = useQuery(api.subreddits.getSubreddits)
+  const radarStatus = useQuery(api.subreddits.getRadarStatus)
   const toggleSubreddit = useMutation(api.subreddits.toggleSubreddit)
 
   const [selectedId, setSelectedId] = useState<Id<"subreddits"> | null>(null)
@@ -460,6 +477,7 @@ export default function RadarPage() {
         {showAddInput && (
           <AddSubredditInput onDone={() => setShowAddInput(false)} />
         )}
+        <ManualSubredditNotice status={radarStatus} />
         <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-border py-16 text-center">
           <p className="text-sm text-text-secondary">
             Your subreddits will appear here once onboarding analysis completes.
@@ -494,6 +512,7 @@ export default function RadarPage() {
       {showAddInput && (
         <AddSubredditInput onDone={() => setShowAddInput(false)} />
       )}
+      <ManualSubredditNotice status={radarStatus} />
 
       {/* List */}
       <div className="space-y-0.5">

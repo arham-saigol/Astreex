@@ -36,6 +36,7 @@ type Tab = "account" | "brand" | "billing"
 type Plan = "starter" | "growth" | "scale"
 type PlanStatus = "trialing" | "active" | "canceled" | "past_due" | "trial_expired"
 type HealthStatus = "healthy" | "warning" | "banned"
+type OnboardingStatus = "in_progress" | "running" | "complete" | "error"
 
 type BrandProfile = {
   name: string
@@ -67,6 +68,8 @@ type SettingsContext = {
     name: string
     plan: Plan
     planStatus: PlanStatus
+    onboardingStatus: OnboardingStatus | null
+    onboardingError: string | null
     trialEndsAt: number | null
     accountLimit: number
   }
@@ -75,6 +78,7 @@ type SettingsContext = {
     websiteUrl: string
     competitorUrl: string
     profileJson: string
+    scrapeStatus: "complete" | "degraded" | null
   } | null
   redditAccounts: RedditAccount[]
 }
@@ -596,6 +600,7 @@ function BrandTab({
 }) {
   const updateBrandProfile = useMutation(api.settings.updateBrandProfile)
   const updateBrandUrls = useMutation(api.settings.updateBrandUrls)
+  const retryOnboardingPipeline = useMutation(api.settings.retryOnboardingPipeline)
   const profile = useMemo(
     () => parseProfile(context.brand?.profileJson),
     [context.brand?.profileJson],
@@ -606,6 +611,7 @@ function BrandTab({
   const [websiteUrl, setWebsiteUrl] = useState(context.brand?.websiteUrl ?? "")
   const [competitorUrl, setCompetitorUrl] = useState(context.brand?.competitorUrl ?? "")
   const [savingUrls, setSavingUrls] = useState(false)
+  const [retryingPipeline, setRetryingPipeline] = useState(false)
 
   const profileChanged = JSON.stringify(draft) !== JSON.stringify(profile)
   const urlsChanged =
@@ -660,6 +666,18 @@ function BrandTab({
     }
   }
 
+  const retryPipeline = async () => {
+    setRetryingPipeline(true)
+    try {
+      await retryOnboardingPipeline({ projectId: context.project._id })
+      toast.success("Brand analysis queued.")
+    } catch (error) {
+      toast.error(getErrorMessage(error))
+    } finally {
+      setRetryingPipeline(false)
+    }
+  }
+
   if (!context.brand) {
     return (
       <div className="rounded-xl border border-dashed border-border p-8 text-center text-[14px] text-text-secondary">
@@ -672,6 +690,28 @@ function BrandTab({
     <div className="space-y-8">
       <Section title="Brand Profile">
         <div className="space-y-4 rounded-xl border border-border bg-surface p-5">
+          {context.project.onboardingStatus === "error" ? (
+            <div className="flex flex-col gap-3 rounded-lg border border-error/30 bg-error/5 p-3 text-[13px] text-error sm:flex-row sm:items-center sm:justify-between">
+              <p>
+                Brand analysis failed{context.project.onboardingError ? `: ${context.project.onboardingError}` : "."}
+              </p>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={retryPipeline}
+                disabled={retryingPipeline}
+              >
+                <RefreshCw className="size-3.5" />
+                {retryingPipeline ? "Retrying..." : "Retry"}
+              </Button>
+            </div>
+          ) : null}
+          {context.brand.scrapeStatus === "degraded" ? (
+            <p className="rounded-lg bg-muted p-3 text-[13px] text-text-secondary">
+              We couldn&apos;t fully analyze your website. Consider editing your brand profile manually.
+            </p>
+          ) : null}
           {isEmptyProfile ? (
             <p className="rounded-lg bg-muted p-3 text-[13px] text-text-secondary">
               No generated brand profile yet. Add details below or regenerate after analysis completes.
@@ -979,7 +1019,7 @@ export default function SettingsPage() {
       ) : null}
       {activeTab === "brand" ? (
         <BrandTab
-          key={`${context.brand?.profileJson ?? ""}:${context.brand?.websiteUrl ?? ""}:${context.brand?.competitorUrl ?? ""}`}
+          key={`${context.brand?.profileJson ?? ""}:${context.brand?.websiteUrl ?? ""}:${context.brand?.competitorUrl ?? ""}:${context.project.onboardingStatus ?? ""}`}
           context={context}
         />
       ) : null}

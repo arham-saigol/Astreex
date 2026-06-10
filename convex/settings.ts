@@ -167,6 +167,8 @@ export const getSettingsContext = query({
         name: project.name,
         plan: project.plan,
         planStatus: project.planStatus,
+        onboardingStatus: project.onboardingStatus ?? null,
+        onboardingError: project.onboardingError ?? null,
         trialEndsAt: project.trialEndsAt ?? null,
         accountLimit: planAccountLimit(project.plan),
       },
@@ -176,6 +178,7 @@ export const getSettingsContext = query({
             websiteUrl: brand.websiteUrl,
             competitorUrl: brand.competitorUrl ?? "",
             profileJson: brand.profileJson,
+            scrapeStatus: brand.scrapeStatus ?? null,
           }
         : null,
       redditAccounts: redditAccounts.map((account) => ({
@@ -250,6 +253,27 @@ export const updateBrandUrls = mutation({
       competitorUrl,
       updatedAt: Date.now(),
     })
+  },
+})
+
+export const retryOnboardingPipeline = mutation({
+  args: {
+    projectId: v.id("projects"),
+  },
+  handler: async (ctx, args) => {
+    await getOwnedProject(ctx, args.projectId)
+
+    await ctx.db.patch(args.projectId, {
+      onboardingStatus: "running",
+      onboardingError: undefined,
+      lastActiveAt: Date.now(),
+    })
+
+    await ctx.scheduler.runAfter(0, internal.onboarding.pipeline.runOnboardingPipeline, {
+      projectId: args.projectId,
+    })
+
+    return { queued: true }
   },
 })
 

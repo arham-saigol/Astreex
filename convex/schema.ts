@@ -11,7 +11,17 @@ const planStatus = v.union(
 )
 const onboardingStatus = v.union(
   v.literal("in_progress"),
+  v.literal("running"),
   v.literal("complete"),
+  v.literal("error"),
+)
+const subredditDiscoveryStatus = v.union(
+  v.literal("complete"),
+  v.literal("needs_manual_subreddits"),
+)
+const scrapeStatus = v.union(
+  v.literal("complete"),
+  v.literal("degraded"),
 )
 const redditHealthStatus = v.union(
   v.literal("healthy"),
@@ -53,6 +63,8 @@ export default defineSchema({
     creemCustomerId: v.optional(v.string()),
     creemSubscriptionId: v.optional(v.string()),
     onboardingStatus: v.optional(onboardingStatus),
+    onboardingError: v.optional(v.string()),
+    subredditDiscoveryStatus: v.optional(subredditDiscoveryStatus),
     timezone: v.string(),
     lastAnalyticsRefresh: v.optional(v.number()),
     lastActiveAt: v.number(),
@@ -67,6 +79,7 @@ export default defineSchema({
     websiteUrl: v.string(),
     competitorUrl: v.optional(v.string()),
     profileJson: v.string(),
+    scrapeStatus: v.optional(scrapeStatus),
     createdAt: v.number(),
     updatedAt: v.number(),
   }).index("by_projectId", ["projectId"]),
