@@ -114,7 +114,9 @@ export default defineSchema({
     ),
     fetchedAt: v.number(),
     expiresAt: v.number(),
-  }).index("by_subredditName", ["subredditName"]),
+  })
+    .index("by_subredditName", ["subredditName"])
+    .index("by_expiresAt", ["expiresAt"]),
 
   surfacedPosts: defineTable({
     projectId: v.id("projects"),
@@ -129,7 +131,8 @@ export default defineSchema({
     surfacedAt: v.number(),
   })
     .index("by_projectId", ["projectId"])
-    .index("by_projectId_redditPostId", ["projectId", "redditPostId"]),
+    .index("by_projectId_redditPostId", ["projectId", "redditPostId"])
+    .index("by_surfacedAt", ["surfacedAt"]),
 
   cards: defineTable({
     projectId: v.id("projects"),
@@ -143,18 +146,27 @@ export default defineSchema({
     scheduledFor: v.optional(v.number()),
     postedAt: v.optional(v.number()),
     redditCommentId: v.optional(v.string()),
+    failureReason: v.optional(v.string()),
+    postRetryCount: v.optional(v.number()),
+    lastPostAttemptAt: v.optional(v.number()),
     createdAt: v.number(),
   })
     .index("by_projectId", ["projectId"])
     .index("by_projectId_status", ["projectId", "status"])
     .index("by_status_and_createdAt", ["status", "createdAt"])
-    .index("by_projectId_and_surfacedPostId", ["projectId", "surfacedPostId"]),
+    .index("by_projectId_and_surfacedPostId", ["projectId", "surfacedPostId"])
+    .index("by_projectId_and_createdAt", ["projectId", "createdAt"])
+    .index("by_redditAccountId_and_scheduledFor", ["redditAccountId", "scheduledFor"]),
 
   postedContent: defineTable({
     projectId: v.id("projects"),
     cardId: v.id("cards"),
+    redditAccountId: v.optional(v.id("redditAccounts")),
     redditId: v.string(),
+    redditThingId: v.optional(v.string()),
     subreddit: v.string(),
+    type: v.optional(cardType),
+    permalink: v.optional(v.string()),
     score: v.number(),
     replyCount: v.number(),
     visibility: contentVisibility,
@@ -163,7 +175,28 @@ export default defineSchema({
   })
     .index("by_projectId", ["projectId"])
     .index("by_cardId", ["cardId"])
-    .index("by_projectId_and_createdAt", ["projectId", "createdAt"]),
+    .index("by_projectId_and_createdAt", ["projectId", "createdAt"])
+    .index("by_createdAt", ["createdAt"])
+    .index("by_redditAccountId_and_createdAt", ["redditAccountId", "createdAt"]),
+
+  notifications: defineTable({
+    projectId: v.id("projects"),
+    redditAccountId: v.optional(v.id("redditAccounts")),
+    type: v.union(
+      v.literal("reddit_health_warning"),
+      v.literal("reddit_health_banned"),
+    ),
+    status: v.union(v.literal("unread"), v.literal("resolved")),
+    message: v.string(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_projectId_and_status", ["projectId", "status"])
+    .index("by_projectId_and_type_and_redditAccountId", [
+      "projectId",
+      "type",
+      "redditAccountId",
+    ]),
 
   rateLimitLog: defineTable({
     service: v.literal("reddit"),

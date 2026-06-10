@@ -326,6 +326,23 @@ export const markAccountWarning = internalMutation({
   },
 })
 
+export const setAccountHealthStatus = internalMutation({
+  args: {
+    redditAccountId: v.id("redditAccounts"),
+    healthStatus: v.union(
+      v.literal("healthy"),
+      v.literal("warning"),
+      v.literal("banned"),
+    ),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.redditAccountId, {
+      healthStatus: args.healthStatus,
+      lastCheckedAt: Date.now(),
+    })
+  },
+})
+
 export const refreshRedditToken = internalAction({
   args: {
     redditAccountId: v.id("redditAccounts"),

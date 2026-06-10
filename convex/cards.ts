@@ -1,6 +1,78 @@
 import { v } from "convex/values"
 import { internal } from "./_generated/api"
+import type { Id } from "./_generated/dataModel"
 import { internalMutation, mutation, query, type MutationCtx } from "./_generated/server"
+
+const FIVE_MINUTES_MS = 5 * 60 * 1000
+const TEN_MINUTES_MS = 10 * 60 * 1000
+
+function localDateParts(timeZone: string, date: Date) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(date)
+
+  const values = Object.fromEntries(
+    parts.map((part) => [part.type, part.value]),
+  )
+
+  return {
+    year: Number(values.year),
+    month: Number(values.month),
+    day: Number(values.day),
+    hour: Number(values.hour),
+    minute: Number(values.minute),
+    second: Number(values.second),
+  }
+}
+
+function getTimeZoneOffsetMs(timeZone: string, timestamp: number) {
+  const parts = localDateParts(timeZone, new Date(timestamp))
+  const localAsUtc = Date.UTC(
+    parts.year,
+    parts.month - 1,
+    parts.day,
+    parts.hour,
+    parts.minute,
+    parts.second,
+  )
+
+  return localAsUtc - timestamp
+}
+
+function localMidnightUtcMs(timeZone: string, date: Date) {
+  const parts = localDateParts(timeZone, date)
+  const guess = Date.UTC(parts.year, parts.month - 1, parts.day, 0, 0, 0)
+  return guess - getTimeZoneOffsetMs(timeZone, guess)
+}
+
+function randomFiveToTenMinutes() {
+  return FIVE_MINUTES_MS + Math.floor(Math.random() * FIVE_MINUTES_MS)
+}
+
+async function findScheduledSpacingConflicts(
+  ctx: MutationCtx,
+  redditAccountId: Id<"redditAccounts">,
+  candidate: number,
+) {
+  const rows = await ctx.db
+    .query("cards")
+    .withIndex("by_redditAccountId_and_scheduledFor", (q) =>
+      q
+        .eq("redditAccountId", redditAccountId)
+        .gte("scheduledFor", candidate - FIVE_MINUTES_MS)
+        .lte("scheduledFor", candidate + FIVE_MINUTES_MS),
+    )
+    .take(50)
+
+  return rows.filter((row) => row.status === "scheduled")
+}
 
 export const getActiveCards = query({
   args: {},
@@ -94,10 +166,59 @@ export const approveCard = mutation({
       throw new Error("Not authorized")
     }
 
+    if (card.status !== "pending") {
+      throw new Error("Only pending cards can be approved")
+    }
+
+    const now = Date.now()
+    const localMidnight = localMidnightUtcMs(project.timezone, new Date(now))
+    const todaysCards = await ctx.db
+      .query("cards")
+      .withIndex("by_projectId_and_createdAt", (q) =>
+        q.eq("projectId", project._id).gte("createdAt", localMidnight),
+      )
+      .take(16)
+
+    const windowMs =
+      todaysCards.length > 15 ? 18 * 60 * 60 * 1000 : 12 * 60 * 60 * 1000
+    let scheduledFor = now + Math.floor(Math.random() * windowMs)
+    let latestConflictScheduledFor: number | null = null
+
+    for (let attempt = 0; attempt < 12; attempt++) {
+      const conflicts = await findScheduledSpacingConflicts(
+        ctx,
+        card.redditAccountId,
+        scheduledFor,
+      )
+
+      if (conflicts.length === 0) {
+        latestConflictScheduledFor = null
+        break
+      }
+
+      latestConflictScheduledFor = Math.max(
+        ...conflicts.map((conflict) => conflict.scheduledFor ?? scheduledFor),
+      )
+      scheduledFor += randomFiveToTenMinutes()
+    }
+
+    if (latestConflictScheduledFor !== null) {
+      scheduledFor = latestConflictScheduledFor + randomFiveToTenMinutes()
+    }
+
     await ctx.db.patch(args.cardId, {
-      status: "approved",
+      status: "scheduled",
+      scheduledFor,
       ...(args.editedContent !== undefined ? { editedContent: args.editedContent } : {}),
+      postRetryCount: 0,
+      failureReason: undefined,
     })
+
+    await ctx.scheduler.runAt(
+      scheduledFor,
+      internal.pipeline.poster.postToReddit,
+      { cardId: args.cardId, retryAttempt: 0 },
+    )
   },
 })
 
