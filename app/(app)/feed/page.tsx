@@ -531,6 +531,11 @@ export default function FeedPage() {
   const [isExiting, setIsExiting] = useState(false)
   const [decisions, setDecisions] = useState<Array<"approved" | "declined">>([])
 
+  function resetExitState() {
+    setIsExiting(false)
+    setExitDirection(null)
+  }
+
   // Loading state
   if (cards === undefined) {
     return <CardSkeleton />
@@ -553,45 +558,45 @@ export default function FeedPage() {
     return <CompletionState approved={approvedCount} declined={declinedCount} />
   }
 
-  function handleApprove(editedContent?: string) {
+  async function handleApprove(editedContent?: string) {
     if (!currentCard || isExiting) return
     setExitDirection("right")
     setIsExiting(true)
     setDecisions((prev) => [...prev, "approved"])
 
-    // Optimistic — fire mutation in background
-    approveCard({
-      cardId: currentCard._id,
-      editedContent: editedContent,
-    }).catch(() => {
+    try {
+      await approveCard({
+        cardId: currentCard._id,
+        editedContent: editedContent,
+      })
+      setTimeout(() => {
+        setCurrentIndex((i) => i + 1)
+        resetExitState()
+      }, 300)
+    } catch {
       toast.error("Card approval failed. Please try again.")
-    })
-
-    // Advance after animation
-    setTimeout(() => {
-      setCurrentIndex((i) => i + 1)
-      setIsExiting(false)
-      setExitDirection(null)
-    }, 300)
+      setDecisions((prev) => prev.slice(0, -1))
+      resetExitState()
+    }
   }
 
-  function handleDecline() {
+  async function handleDecline() {
     if (!currentCard || isExiting) return
     setExitDirection("left")
     setIsExiting(true)
     setDecisions((prev) => [...prev, "declined"])
 
-    // Optimistic — fire mutation in background
-    declineCard({ cardId: currentCard._id }).catch(() => {
+    try {
+      await declineCard({ cardId: currentCard._id })
+      setTimeout(() => {
+        setCurrentIndex((i) => i + 1)
+        resetExitState()
+      }, 300)
+    } catch {
       toast.error("Card decline failed. Please try again.")
-    })
-
-    // Advance after animation
-    setTimeout(() => {
-      setCurrentIndex((i) => i + 1)
-      setIsExiting(false)
-      setExitDirection(null)
-    }, 300)
+      setDecisions((prev) => prev.slice(0, -1))
+      resetExitState()
+    }
   }
 
   return (

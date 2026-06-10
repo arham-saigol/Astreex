@@ -378,7 +378,8 @@ function AccountTab({
   const usedAccounts = context.redditAccounts.filter((account) => account.isActive).length
   const accountLimit = context.project.accountLimit
   const canConnect = usedAccounts < accountLimit
-  const canDelete = context.project.planStatus === "canceled"
+  const canDelete =
+    context.project.planStatus === "canceled" || !context.project.hasCreemCustomer
 
   const handleSaveName = async () => {
     if (!name.trim() || name.trim() === displayName) return
@@ -409,10 +410,15 @@ function AccountTab({
   const handleDeleteProject = async () => {
     setIsDeleting(true)
     try {
-      await deleteProject({
+      const result = await deleteProject({
         projectId: context.project._id,
         confirmation,
       })
+      if (result.status === "queued") {
+        toast.success("Project deletion queued.")
+        setDeleteOpen(false)
+        return
+      }
       toast.success("Project deleted.")
       setDeleteOpen(false)
       router.replace("/onboarding")
@@ -611,6 +617,7 @@ function BrandTab({
   const updateBrandProfile = useMutation(api.settings.updateBrandProfile)
   const updateBrandUrls = useMutation(api.settings.updateBrandUrls)
   const retryOnboardingPipeline = useMutation(api.settings.retryOnboardingPipeline)
+  const reanalyzeBrandProfile = useMutation(api.settings.reanalyzeBrandProfile)
   const profile = useMemo(
     () => parseProfile(context.brand?.profileJson),
     [context.brand?.profileJson],
@@ -622,6 +629,7 @@ function BrandTab({
   const [competitorUrl, setCompetitorUrl] = useState(context.brand?.competitorUrl ?? "")
   const [savingUrls, setSavingUrls] = useState(false)
   const [retryingPipeline, setRetryingPipeline] = useState(false)
+  const [reanalyzingBrand, setReanalyzingBrand] = useState(false)
   const [now] = useState(() => Date.now())
 
   const profileChanged = JSON.stringify(draft) !== JSON.stringify(profile)
@@ -688,6 +696,18 @@ function BrandTab({
       toast.error(getErrorMessage(error))
     } finally {
       setRetryingPipeline(false)
+    }
+  }
+
+  const regenerateBrandProfile = async () => {
+    setReanalyzingBrand(true)
+    try {
+      await reanalyzeBrandProfile({ projectId: context.project._id })
+      toast.success("Brand analysis queued.")
+    } catch (error) {
+      toast.error(getErrorMessage(error))
+    } finally {
+      setReanalyzingBrand(false)
     }
   }
 
@@ -861,10 +881,11 @@ function BrandTab({
             <Button
               type="button"
               variant="outline"
-              onClick={() => toast.success("Brand re-analysis queued. Updates will appear within 24 hours.")}
+              onClick={regenerateBrandProfile}
+              disabled={reanalyzingBrand}
             >
               <RefreshCw className="size-3.5" />
-              Regenerate brand profile
+              {reanalyzingBrand ? "Regenerating..." : "Regenerate brand profile"}
             </Button>
             <Button type="button" onClick={saveUrls} disabled={!urlsChanged || savingUrls}>
               {savingUrls ? "Saving..." : "Save URLs"}

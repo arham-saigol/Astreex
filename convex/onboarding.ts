@@ -71,6 +71,19 @@ type PrepareProjectArgs = {
   timezone: string
 }
 
+function validateHttpUrl(value: string, label: string) {
+  let url: URL
+  try {
+    url = new URL(value)
+  } catch {
+    throw new Error(`${label} must be a valid URL`)
+  }
+
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error(`${label} must start with http:// or https://`)
+  }
+}
+
 async function prepareProject(ctx: MutationCtx, args: PrepareProjectArgs) {
   const user = await getOrCreateUser(ctx)
   const projectName = args.projectName.trim()
@@ -78,7 +91,14 @@ async function prepareProject(ctx: MutationCtx, args: PrepareProjectArgs) {
   const competitorUrl = args.competitorUrl?.trim()
 
   if (!projectName) throw new Error("Project name is required")
+  if (projectName.length > 100) throw new Error("Project name is too long")
   if (!websiteUrl) throw new Error("Website URL is required")
+  if (websiteUrl.length > 2048) throw new Error("Website URL is too long")
+  if (competitorUrl && competitorUrl.length > 2048) {
+    throw new Error("Competitor URL is too long")
+  }
+  validateHttpUrl(websiteUrl, "Website URL")
+  if (competitorUrl) validateHttpUrl(competitorUrl, "Competitor URL")
 
   const now = Date.now()
 
@@ -226,7 +246,6 @@ export const completeOnboarding = mutation({
     competitorUrl: v.optional(v.string()),
     plan: planValidator,
     timezone: v.string(),
-    projectId: v.optional(v.id("projects")),
   },
   handler: async (ctx, args) => {
     const prepared = await prepareProject(ctx, args)

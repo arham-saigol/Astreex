@@ -1,10 +1,37 @@
 import { v } from "convex/values"
 import { internalMutation } from "../_generated/server"
-import { draftValidator } from "./validators"
+import { draftValidator, type Draft } from "./validators"
+
+function stableHash(value: string) {
+  let hash = 5381
+  for (let index = 0; index < value.length; index++) {
+    hash = (hash * 33) ^ value.charCodeAt(index)
+  }
+  return (hash >>> 0).toString(36)
+}
+
+function draftKey(draft: Draft) {
+  if (draft.type === "reply") {
+    return stableHash(JSON.stringify({
+      type: draft.type,
+      surfacedPostId: draft.surfacedPostId,
+      targetSubreddit: draft.targetSubreddit,
+      draftContent: draft.draftContent,
+    }))
+  }
+
+  return stableHash(JSON.stringify({
+    type: draft.type,
+    targetSubreddit: draft.targetSubreddit,
+    title: draft.title,
+    body: draft.body,
+  }))
+}
 
 export const createDailyCards = internalMutation({
   args: {
     projectId: v.id("projects"),
+    runId: v.id("pipelineRuns"),
     selectedDrafts: v.array(draftValidator),
   },
   handler: async (ctx, args) => {
@@ -21,8 +48,20 @@ export const createDailyCards = internalMutation({
     const now = Date.now()
     let created = 0
 
-    for (const draft of args.selectedDrafts) {
-      const redditAccount = activeAccounts[created % activeAccounts.length]
+    for (const [index, draft] of args.selectedDrafts.entries()) {
+      const key = draftKey(draft)
+      const existing = await ctx.db
+        .query("cards")
+        .withIndex("by_projectId_and_pipelineRunId_and_draftKey", (q) =>
+          q
+            .eq("projectId", args.projectId)
+            .eq("pipelineRunId", args.runId)
+            .eq("draftKey", key),
+        )
+        .first()
+      if (existing) continue
+
+      const redditAccount = activeAccounts[index % activeAccounts.length]
 
       if (draft.type === "reply") {
         await ctx.db.insert("cards", {
@@ -33,6 +72,8 @@ export const createDailyCards = internalMutation({
           targetSubreddit: draft.targetSubreddit,
           draftContent: draft.draftContent,
           status: "pending",
+          pipelineRunId: args.runId,
+          draftKey: key,
           createdAt: now,
         })
       } else {
@@ -44,6 +85,8 @@ export const createDailyCards = internalMutation({
           targetSubreddit: draft.targetSubreddit,
           draftContent: `${draft.title}\n${draft.body}`,
           status: "pending",
+          pipelineRunId: args.runId,
+          draftKey: key,
           createdAt: now,
         })
       }

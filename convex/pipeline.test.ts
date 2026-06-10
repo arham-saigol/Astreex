@@ -1,7 +1,7 @@
 /// <reference types="vite/client" />
 
 import { convexTest } from "convex-test"
-import { afterEach, describe, expect, test, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest"
 import { api, internal } from "./_generated/api"
 import type { Id } from "./_generated/dataModel"
 import schema from "./schema"
@@ -9,13 +9,29 @@ import { candidatePoolSize } from "./lib/candidatePool"
 import { sanitizeJudgeSelection } from "./lib/judgeSelection"
 import { getPipelineLimits } from "./lib/planLimits"
 import { localDateAndHour } from "./crons"
+import { isValidBrandProfile } from "./pipeline/data"
 
 const modules = import.meta.glob("./**/*.ts")
 
 afterEach(() => {
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
+  vi.unstubAllEnvs()
   vi.useRealTimers()
+})
+
+function stubRequiredEnv() {
+  vi.stubEnv("DEEPSEEK_API_KEY", "test")
+  vi.stubEnv("REDDIT_CLIENT_ID", "client")
+  vi.stubEnv("REDDIT_CLIENT_SECRET", "secret")
+  vi.stubEnv(
+    "REDDIT_TOKEN_ENCRYPTION_KEY",
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  )
+}
+
+beforeEach(() => {
+  stubRequiredEnv()
 })
 
 async function seedProject(t: ReturnType<typeof convexTest>) {
@@ -152,6 +168,13 @@ describe("pipeline helpers", () => {
     expect(selected).toHaveLength(2)
     expect(selected.some((draft) => draft.type === "original")).toBe(true)
   })
+
+  test("brand profile validity rejects empty and malformed JSON", () => {
+    expect(isValidBrandProfile("{}")).toBe(false)
+    expect(isValidBrandProfile("  ")).toBe(false)
+    expect(isValidBrandProfile("[]")).toBe(false)
+    expect(isValidBrandProfile(JSON.stringify({ name: "Astreex" }))).toBe(true)
+  })
 })
 
 describe("pipeline Convex mutations", () => {
@@ -248,10 +271,17 @@ describe("pipeline Convex mutations", () => {
   })
 
   test("createDailyCards assigns accounts round-robin and formats originals", async () => {
+    stubRequiredEnv()
     const t = convexTest(schema, modules)
     const { projectId } = await seedProject(t)
 
     const seeded = await t.run(async (ctx) => {
+      const runId = await ctx.db.insert("pipelineRuns", {
+        projectId,
+        localDate: "2026-06-09",
+        status: "running",
+        startedAt: Date.now(),
+      })
       const account1 = await ctx.db.insert("redditAccounts", {
         projectId,
         redditUsername: "founder1",
@@ -284,11 +314,12 @@ describe("pipeline Convex mutations", () => {
         surfacedAt: Date.now(),
       })
 
-      return { account1, account2, surfacedPostId }
+      return { runId, account1, account2, surfacedPostId }
     })
 
     const result = await t.mutation(internal.pipeline.createCards.createDailyCards, {
       projectId,
+      runId: seeded.runId,
       selectedDrafts: [
         {
           type: "reply",
@@ -328,10 +359,80 @@ describe("pipeline Convex mutations", () => {
     expect(cards[1].surfacedPostId).toBeNull()
     expect(cards[1].draftContent).toBe("Original title\nOriginal body")
   })
+
+  test("createDailyCards skips drafts already created for a pipeline run", async () => {
+    stubRequiredEnv()
+    const t = convexTest(schema, modules)
+    const { projectId } = await seedProject(t)
+
+    const seeded = await t.run(async (ctx) => {
+      const runId = await ctx.db.insert("pipelineRuns", {
+        projectId,
+        localDate: "2026-06-09",
+        status: "running",
+        startedAt: Date.now(),
+      })
+      const redditAccountId = await ctx.db.insert("redditAccounts", {
+        projectId,
+        redditUsername: "founder1",
+        accessToken: "encrypted",
+        refreshToken: "encrypted",
+        tokenExpiresAt: Date.now() + 60_000,
+        isActive: true,
+        healthStatus: "healthy",
+        createdAt: Date.now(),
+      })
+      const surfacedPostId = await ctx.db.insert("surfacedPosts", {
+        projectId,
+        redditPostId: "abc",
+        subreddit: "saas",
+        title: "Question",
+        url: "https://reddit.com/abc",
+        score: 1,
+        commentCount: 1,
+        postedAt: Date.now(),
+        surfacedAt: Date.now(),
+      })
+      return { runId, redditAccountId, surfacedPostId }
+    })
+
+    const selectedDrafts = [
+      {
+        type: "reply" as const,
+        surfacedPostId: seeded.surfacedPostId,
+        targetSubreddit: "saas",
+        draftContent: "Reply 1",
+      },
+    ]
+
+    const first = await t.mutation(internal.pipeline.createCards.createDailyCards, {
+      projectId,
+      runId: seeded.runId,
+      selectedDrafts,
+    })
+    const second = await t.mutation(internal.pipeline.createCards.createDailyCards, {
+      projectId,
+      runId: seeded.runId,
+      selectedDrafts,
+    })
+
+    const cards = await t.run(async (ctx) => {
+      return await ctx.db
+        .query("cards")
+        .withIndex("by_projectId", (q) => q.eq("projectId", projectId))
+        .take(10)
+    })
+
+    expect(first.created).toBe(1)
+    expect(second.created).toBe(0)
+    expect(cards).toHaveLength(1)
+    expect(cards[0].redditAccountId).toBe(seeded.redditAccountId)
+  })
 })
 
 describe("posting scheduler", () => {
   test("approveCard schedules a pending card within the 12 hour window", async () => {
+    stubRequiredEnv()
     vi.setSystemTime(new Date("2026-06-09T12:00:00.000Z"))
     vi.spyOn(Math, "random").mockReturnValue(0.5)
 
@@ -363,6 +464,7 @@ describe("posting scheduler", () => {
   })
 
   test("approveCard uses the 18 hour window after more than 15 cards today", async () => {
+    stubRequiredEnv()
     vi.setSystemTime(new Date("2026-06-09T12:00:00.000Z"))
     vi.spyOn(Math, "random").mockReturnValue(0.99)
 
@@ -389,6 +491,7 @@ describe("posting scheduler", () => {
   })
 
   test("same-account scheduled cards are spaced at least five minutes apart", async () => {
+    stubRequiredEnv()
     vi.setSystemTime(new Date("2026-06-09T12:00:00.000Z"))
     vi.spyOn(Math, "random").mockReturnValue(0)
 
@@ -413,6 +516,7 @@ describe("posting scheduler", () => {
   })
 
   test("multiple approvals produce varied randomized offsets", async () => {
+    stubRequiredEnv()
     vi.setSystemTime(new Date("2026-06-09T12:00:00.000Z"))
     const randomValues = [0.01, 0.18, 0.33, 0.47, 0.52, 0.69, 0.74, 0.81, 0.9, 0.97]
     let randomIndex = 0
@@ -452,6 +556,7 @@ describe("posting scheduler", () => {
   })
 
   test("approveCard rejects non-pending cards without scheduling again", async () => {
+    stubRequiredEnv()
     vi.setSystemTime(new Date("2026-06-09T12:00:00.000Z"))
     vi.spyOn(Math, "random").mockReturnValue(0.2)
 
@@ -470,6 +575,20 @@ describe("posting scheduler", () => {
       async (ctx) => await ctx.db.system.query("_scheduled_functions").collect(),
     )
     expect(scheduled).toHaveLength(1)
+  })
+
+  test("declineCard rejects non-pending cards", async () => {
+    stubRequiredEnv()
+    const t = convexTest(schema, modules)
+    const { projectId } = await seedProject(t)
+    const redditAccountId = await seedRedditAccount(t, projectId)
+    const cardId = await seedPendingCard(t, projectId, redditAccountId)
+    const authed = t.withIdentity({ subject: "user_1" })
+
+    await authed.mutation(api.cards.declineCard, { cardId })
+    await expect(
+      authed.mutation(api.cards.declineCard, { cardId }),
+    ).rejects.toThrow("Only pending cards can be declined")
   })
 })
 

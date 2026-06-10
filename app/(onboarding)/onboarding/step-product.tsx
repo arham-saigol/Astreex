@@ -96,7 +96,7 @@ export function StepProduct({ data, updateData, onNext, onBack }: Props) {
       </div>
 
       <div className="flex gap-3">
-        <Button type="button" variant="ghost" size="lg" onClick={onBack}>
+        <Button type="button" variant="ghost" size="lg" onClick={onBack} aria-label="Go back">
           <ArrowLeft className="size-4" />
         </Button>
         <Button type="submit" className="flex-1" size="lg">

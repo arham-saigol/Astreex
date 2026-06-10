@@ -109,13 +109,13 @@ async function runDeleteProjectBatch(
   userId: Id<"users">,
 ) {
   const project = await ctx.db.get(projectId)
-  if (!project) return
+  if (!project) return { status: "deleted" as const }
 
   if (project.userId !== userId) {
     throw new Error("Not authorized")
   }
 
-  if (project.planStatus !== "canceled") {
+  if (project.planStatus !== "canceled" && project.creemCustomerId) {
     throw new Error("Cancel your plan before deleting this project")
   }
 
@@ -126,10 +126,11 @@ async function runDeleteProjectBatch(
       projectId,
       userId,
     })
-    return
+    return { status: "queued" as const }
   }
 
   await ctx.db.delete(projectId)
+  return { status: "deleted" as const }
 }
 
 export const getSettingsContext = query({
@@ -276,6 +277,38 @@ export const retryOnboardingPipeline = mutation({
   },
 })
 
+export const reanalyzeBrandProfile = mutation({
+  args: {
+    projectId: v.id("projects"),
+  },
+  handler: async (ctx, args) => {
+    await getOwnedProject(ctx, args.projectId)
+
+    const brand = await ctx.db
+      .query("brands")
+      .withIndex("by_projectId", (q) => q.eq("projectId", args.projectId))
+      .first()
+    if (!brand) throw new Error("Brand not found")
+
+    const now = Date.now()
+    await ctx.db.patch(brand._id, {
+      profileJson: "{}",
+      updatedAt: now,
+    })
+    await ctx.db.patch(args.projectId, {
+      onboardingStatus: "running",
+      onboardingError: undefined,
+      lastActiveAt: now,
+    })
+
+    await ctx.scheduler.runAfter(0, internal.onboarding.pipeline.runOnboardingPipeline, {
+      projectId: args.projectId,
+    })
+
+    return { queued: true }
+  },
+})
+
 export const disconnectRedditAccount = mutation({
   args: {
     redditAccountId: v.id("redditAccounts"),
@@ -301,11 +334,11 @@ export const deleteProject = mutation({
       throw new Error("Confirmation does not match")
     }
 
-    if (project.planStatus !== "canceled") {
+    if (project.planStatus !== "canceled" && project.creemCustomerId) {
       throw new Error("Cancel your plan before deleting this project")
     }
 
-    await runDeleteProjectBatch(ctx, args.projectId, project.userId)
+    return await runDeleteProjectBatch(ctx, args.projectId, project.userId)
   },
 })
 

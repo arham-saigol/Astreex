@@ -23,6 +23,27 @@ type RedditMeResponse = {
   name?: string
 }
 
+async function fetchWithTimeout(
+  input: RequestInfo | URL,
+  init: RequestInit,
+  timeoutMs: number,
+  label: string,
+) {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+
+  try {
+    return await fetch(input, { ...init, signal: controller.signal })
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new Error(`${label} timed out`)
+    }
+    throw error
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 function badRequest(request: NextRequest, returnTo: ReturnType<typeof safeReturnTo>, message: string) {
   const response = NextResponse.redirect(
     errorRedirectTarget(request, returnTo, message),
@@ -46,15 +67,20 @@ async function exchangeCodeForToken(code: string) {
     redirect_uri: redirectUri,
   })
 
-  const response = await fetch("https://www.reddit.com/api/v1/access_token", {
-    method: "POST",
-    headers: {
-      Authorization: `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString("base64")}`,
-      "Content-Type": "application/x-www-form-urlencoded",
-      "User-Agent": "astreex/0.1",
+  const response = await fetchWithTimeout(
+    "https://www.reddit.com/api/v1/access_token",
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString("base64")}`,
+        "Content-Type": "application/x-www-form-urlencoded",
+        "User-Agent": "astreex/0.1",
+      },
+      body,
     },
-    body,
-  })
+    10_000,
+    "Reddit token exchange",
+  )
 
   if (!response.ok) {
     throw new Error("Reddit token exchange failed")
@@ -73,12 +99,17 @@ async function exchangeCodeForToken(code: string) {
 }
 
 async function fetchRedditMe(accessToken: string) {
-  const response = await fetch("https://oauth.reddit.com/api/v1/me", {
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      "User-Agent": "astreex/0.1",
+  const response = await fetchWithTimeout(
+    "https://oauth.reddit.com/api/v1/me",
+    {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "User-Agent": "astreex/0.1",
+      },
     },
-  })
+    10_000,
+    "Reddit identity fetch",
+  )
 
   if (!response.ok) {
     throw new Error("Failed to load Reddit identity")
@@ -122,10 +153,10 @@ export async function GET(request: NextRequest) {
     return badRequest(request, returnTo, "Missing OAuth code")
   }
 
-  const { client, response } = await getAuthedConvexClient(request)
+  const { client, response: authResponse } = await getAuthedConvexClient(request)
   if (!client) {
-    clearOAuthCookies(response)
-    return response
+    clearOAuthCookies(authResponse)
+    return authResponse
   }
 
   try {

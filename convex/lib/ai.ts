@@ -1,10 +1,12 @@
 import { createDeepSeek } from "@ai-sdk/deepseek"
 
-const deepseek = createDeepSeek({
-  apiKey: process.env.DEEPSEEK_API_KEY ?? "",
-})
-
 export function deepseekV4Pro() {
+  const apiKey = process.env.DEEPSEEK_API_KEY?.trim()
+  if (!apiKey) {
+    throw new Error("DEEPSEEK_API_KEY is not configured")
+  }
+
+  const deepseek = createDeepSeek({ apiKey })
   return deepseek("deepseek-v4-pro")
 }
 

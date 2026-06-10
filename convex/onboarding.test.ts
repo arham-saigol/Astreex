@@ -1,13 +1,31 @@
 /// <reference types="vite/client" />
 
 import { convexTest } from "convex-test"
-import { describe, expect, test } from "vitest"
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest"
 import { api, internal } from "./_generated/api"
 import type { Id } from "./_generated/dataModel"
 import { getSubredditDiscoveryLimits } from "./lib/planLimits"
 import schema from "./schema"
 
 const modules = import.meta.glob("./**/*.ts")
+
+function stubRequiredEnv() {
+  vi.stubEnv("DEEPSEEK_API_KEY", "test")
+  vi.stubEnv("REDDIT_CLIENT_ID", "client")
+  vi.stubEnv("REDDIT_CLIENT_SECRET", "secret")
+  vi.stubEnv(
+    "REDDIT_TOKEN_ENCRYPTION_KEY",
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  )
+}
+
+beforeEach(() => {
+  stubRequiredEnv()
+})
+
+afterEach(() => {
+  vi.unstubAllEnvs()
+})
 
 async function seedPipelineProject(t: ReturnType<typeof convexTest>) {
   return await t.run(async (ctx) => {
@@ -134,5 +152,31 @@ describe("onboarding pipeline helpers", () => {
 
     expect(state.project?.onboardingStatus).toBe("running")
     expect(state.scheduled).toHaveLength(1)
+  })
+
+  test("completeOnboarding validates URL protocol and length", async () => {
+    const t = convexTest(schema, modules)
+    const authed = t.withIdentity({
+      subject: "user_1",
+      email: "founder@example.com",
+    })
+
+    await expect(
+      authed.mutation(api.onboarding.completeOnboarding, {
+        projectName: "Astreex",
+        websiteUrl: "ftp://astreex.example",
+        plan: "growth",
+        timezone: "America/New_York",
+      }),
+    ).rejects.toThrow("Website URL must start with http:// or https://")
+
+    await expect(
+      authed.mutation(api.onboarding.completeOnboarding, {
+        projectName: "A".repeat(101),
+        websiteUrl: "https://astreex.example",
+        plan: "growth",
+        timezone: "America/New_York",
+      }),
+    ).rejects.toThrow("Project name is too long")
   })
 })

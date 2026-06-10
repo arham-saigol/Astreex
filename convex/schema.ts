@@ -114,6 +114,7 @@ export default defineSchema({
     createdAt: v.number(),
   })
     .index("by_projectId", ["projectId"])
+    .index("by_projectId_and_name", ["projectId", "name"])
     .index("by_projectId_active", ["projectId", "active"]),
 
   subredditCache: defineTable({
@@ -167,6 +168,8 @@ export default defineSchema({
     failureReason: v.optional(v.string()),
     postRetryCount: v.optional(v.number()),
     lastPostAttemptAt: v.optional(v.number()),
+    pipelineRunId: v.optional(v.id("pipelineRuns")),
+    draftKey: v.optional(v.string()),
     createdAt: v.number(),
   })
     .index("by_projectId", ["projectId"])
@@ -174,6 +177,11 @@ export default defineSchema({
     .index("by_status_and_createdAt", ["status", "createdAt"])
     .index("by_projectId_and_surfacedPostId", ["projectId", "surfacedPostId"])
     .index("by_projectId_and_createdAt", ["projectId", "createdAt"])
+    .index("by_projectId_and_pipelineRunId_and_draftKey", [
+      "projectId",
+      "pipelineRunId",
+      "draftKey",
+    ])
     .index("by_redditAccountId_and_scheduledFor", ["redditAccountId", "scheduledFor"]),
 
   postedContent: defineTable({
@@ -214,6 +222,12 @@ export default defineSchema({
       "projectId",
       "type",
       "redditAccountId",
+    ])
+    .index("by_projectId_and_type_and_redditAccountId_and_status", [
+      "projectId",
+      "type",
+      "redditAccountId",
+      "status",
     ]),
 
   rateLimitLog: defineTable({

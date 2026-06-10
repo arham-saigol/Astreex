@@ -156,13 +156,11 @@ export const addSubreddit = mutation({
     // Check for duplicate
     const existing = await ctx.db
       .query("subreddits")
-      .withIndex("by_projectId", (q) => q.eq("projectId", project._id))
-      .take(200)
-
-    const isDuplicate = existing.some(
-      (s) => s.name.toLowerCase() === cleanName
-    )
-    if (isDuplicate) throw new Error("DUPLICATE")
+      .withIndex("by_projectId_and_name", (q) =>
+        q.eq("projectId", project._id).eq("name", cleanName),
+      )
+      .first()
+    if (existing) throw new Error("DUPLICATE")
 
     const limits = getPlanLimits(project.plan)
     const activeSubs = await ctx.db

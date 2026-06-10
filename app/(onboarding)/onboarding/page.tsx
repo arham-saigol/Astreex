@@ -37,6 +37,8 @@ export default function OnboardingPage() {
   const [direction, setDirection] = useState(1)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isPreparingProject, setIsPreparingProject] = useState(false)
+  const [prepareError, setPrepareError] = useState<string | null>(null)
+  const [submitError, setSubmitError] = useState<string | null>(null)
 
   const [data, setData] = useState<OnboardingData>({
     projectName: "",
@@ -111,11 +113,13 @@ export default function OnboardingPage() {
 
   const handlePlanNext = useCallback(async () => {
     setIsPreparingProject(true)
+    setPrepareError(null)
     try {
       await ensureDraftProject()
       goNext()
     } catch (error) {
       console.error("Project setup failed:", error)
+      setPrepareError(error instanceof Error ? error.message : "Project setup failed.")
     } finally {
       setIsPreparingProject(false)
     }
@@ -130,6 +134,7 @@ export default function OnboardingPage() {
 
   const handleComplete = useCallback(async () => {
     setIsSubmitting(true)
+    setSubmitError(null)
     try {
       await completeOnboarding({
         projectName: data.projectName,
@@ -137,11 +142,12 @@ export default function OnboardingPage() {
         competitorUrl: data.competitorUrl || undefined,
         plan: data.plan,
         timezone: data.timezone,
-        projectId: data.projectId ?? undefined,
       })
       router.replace("/dashboard")
     } catch (error) {
       console.error("Onboarding failed:", error)
+      setSubmitError(error instanceof Error ? error.message : "Onboarding failed.")
+    } finally {
       setIsSubmitting(false)
     }
   }, [completeOnboarding, data, router])
@@ -209,6 +215,7 @@ export default function OnboardingPage() {
                 onNext={handlePlanNext}
                 onBack={goBack}
                 isPreparing={isPreparingProject}
+                error={prepareError}
               />
             )}
             {step === 4 && (
@@ -218,6 +225,7 @@ export default function OnboardingPage() {
                 onComplete={handleComplete}
                 onConnectReddit={handleConnectReddit}
                 isSubmitting={isSubmitting}
+                error={submitError}
               />
             )}
           </motion.div>

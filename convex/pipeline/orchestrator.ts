@@ -248,6 +248,7 @@ export const runDailyPipeline = internalAction({
         internal.pipeline.createCards.createDailyCards,
         {
           projectId: args.projectId,
+          runId,
           selectedDrafts,
         },
       )

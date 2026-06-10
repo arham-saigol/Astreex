@@ -9,12 +9,12 @@ import { deepseekV4Pro, originalSettings, replySettings } from "../lib/ai"
 import type { Draft } from "./validators"
 
 const replySchema = z.object({
-  reply: z.string().min(1),
+  reply: z.string().min(1).refine((value) => value.trim().length > 0),
 })
 
 const originalPostSchema = z.object({
-  title: z.string().min(1),
-  body: z.string().min(1),
+  title: z.string().min(1).refine((value) => value.trim().length > 0),
+  body: z.string().min(1).refine((value) => value.trim().length > 0),
 })
 
 function truncate(value: string | undefined, length: number) {

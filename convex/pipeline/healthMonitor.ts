@@ -128,6 +128,17 @@ export const checkAccountHealth = internalAction({
         break
       }
 
+      if (!response.ok) {
+        rateLimited = true
+        console.warn(`Reddit health check failed with status ${response.status}`)
+        await ctx.scheduler.runAfter(
+          tenMinutesMs,
+          internal.pipeline.healthMonitor.checkAccountHealth,
+          { beforeCreatedAt, cutoffCreatedAt },
+        )
+        break
+      }
+
       const json = await response.json()
       const result = classifyListing(json, thingId)
 
@@ -299,17 +310,17 @@ export const upsertHealthNotification = internalMutation({
     message: v.string(),
   },
   handler: async (ctx, args) => {
-    const existing = await ctx.db
+    const unread = await ctx.db
       .query("notifications")
-      .withIndex("by_projectId_and_type_and_redditAccountId", (q) =>
+      .withIndex("by_projectId_and_type_and_redditAccountId_and_status", (q) =>
         q
           .eq("projectId", args.projectId)
           .eq("type", args.type)
-          .eq("redditAccountId", args.redditAccountId),
+          .eq("redditAccountId", args.redditAccountId)
+          .eq("status", "unread"),
       )
-      .take(10)
+      .first()
 
-    const unread = existing.find((notification) => notification.status === "unread")
     const now = Date.now()
     if (unread) {
       await ctx.db.patch(unread._id, {
@@ -338,20 +349,20 @@ export const resolveHealthNotifications = internalMutation({
     redditAccountId: v.id("redditAccounts"),
   },
   handler: async (ctx, args) => {
-    const unread = await ctx.db
-      .query("notifications")
-      .withIndex("by_projectId_and_status", (q) =>
-        q.eq("projectId", args.projectId).eq("status", "unread"),
-      )
-      .take(50)
-
     const now = Date.now()
-    for (const notification of unread) {
-      if (
-        notification.redditAccountId === args.redditAccountId &&
-        (notification.type === "reddit_health_warning" ||
-          notification.type === "reddit_health_banned")
-      ) {
+    for (const type of ["reddit_health_warning", "reddit_health_banned"] as const) {
+      const notification = await ctx.db
+        .query("notifications")
+        .withIndex("by_projectId_and_type_and_redditAccountId_and_status", (q) =>
+          q
+            .eq("projectId", args.projectId)
+            .eq("type", type)
+            .eq("redditAccountId", args.redditAccountId)
+            .eq("status", "unread"),
+        )
+        .first()
+
+      if (notification) {
         await ctx.db.patch(notification._id, {
           status: "resolved",
           updatedAt: now,

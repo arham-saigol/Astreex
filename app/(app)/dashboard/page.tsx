@@ -29,15 +29,6 @@ const timeframes: Array<{ label: string; value: Timeframe }> = [
   { label: "All", value: "all" },
 ]
 
-function loadInitialTimeframe(): Timeframe {
-  if (typeof window === "undefined") return "30d"
-
-  const stored = window.localStorage.getItem("astreex-dashboard-timeframe")
-  if (stored === "7d" || stored === "30d" || stored === "all") return stored
-
-  return "30d"
-}
-
 function truncate(value: string, maxLength: number) {
   if (value.length <= maxLength) return value
   return `${value.slice(0, maxLength - 1).trimEnd()}...`
@@ -371,15 +362,16 @@ function BestPerformingList({
 }
 
 export default function DashboardPage() {
-  const [timeframe, setTimeframe] = useState<Timeframe>(loadInitialTimeframe)
+  const [timeframe, setTimeframe] = useState<Timeframe | null>(null)
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [refreshStartedAt, setRefreshStartedAt] = useState<number | null>(null)
   const refreshProjectRef = useRef<string | null>(null)
+  const refreshTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const context = useQuery(api.analytics.getDashboardContext)
   const refreshAnalytics = useAction(api.analytics.refreshAnalytics)
 
-  const queryArgs = context
+  const queryArgs = context && timeframe
     ? { projectId: context.projectId, timeframe }
     : "skip"
 
@@ -389,6 +381,14 @@ export default function DashboardPage() {
   const bestPerforming = useQuery(api.analytics.getBestPerforming, queryArgs)
 
   useEffect(() => {
+    const stored = window.localStorage.getItem("astreex-dashboard-timeframe")
+    const loadedTimeframe =
+      stored === "7d" || stored === "30d" || stored === "all" ? stored : "30d"
+    queueMicrotask(() => setTimeframe(loadedTimeframe))
+  }, [])
+
+  useEffect(() => {
+    if (timeframe === null) return
     window.localStorage.setItem("astreex-dashboard-timeframe", timeframe)
   }, [timeframe])
 
@@ -398,16 +398,36 @@ export default function DashboardPage() {
     refreshProjectRef.current = context.projectId
     setIsRefreshing(true)
     setRefreshStartedAt(context.lastAnalyticsRefresh ?? 0)
+    if (refreshTimeoutRef.current) clearTimeout(refreshTimeoutRef.current)
+    refreshTimeoutRef.current = setTimeout(() => {
+      setIsRefreshing(false)
+      refreshTimeoutRef.current = null
+    }, 15_000)
 
     refreshAnalytics({ projectId: context.projectId })
       .then((result) => {
         if (!result.refreshed) {
           setIsRefreshing(false)
+          if (refreshTimeoutRef.current) {
+            clearTimeout(refreshTimeoutRef.current)
+            refreshTimeoutRef.current = null
+          }
         }
       })
       .catch(() => {
         setIsRefreshing(false)
+        if (refreshTimeoutRef.current) {
+          clearTimeout(refreshTimeoutRef.current)
+          refreshTimeoutRef.current = null
+        }
       })
+
+    return () => {
+      if (refreshTimeoutRef.current) {
+        clearTimeout(refreshTimeoutRef.current)
+        refreshTimeoutRef.current = null
+      }
+    }
   }, [context, refreshAnalytics])
 
   const hasGrowthAnalytics = useMemo(() => {
@@ -422,7 +442,15 @@ export default function DashboardPage() {
     context.lastAnalyticsRefresh > refreshStartedAt
   const showRefreshShimmer = isRefreshing && !refreshCompletedViaSubscription
 
-  if (context === undefined) {
+  useEffect(() => {
+    if (!refreshCompletedViaSubscription) return
+    if (refreshTimeoutRef.current) {
+      clearTimeout(refreshTimeoutRef.current)
+      refreshTimeoutRef.current = null
+    }
+  }, [refreshCompletedViaSubscription])
+
+  if (context === undefined || timeframe === null) {
     return <DashboardSkeleton />
   }
 

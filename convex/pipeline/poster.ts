@@ -36,6 +36,17 @@ function shortFailureReason(value: string) {
   return value.replace(/\s+/g, " ").trim().slice(0, 240)
 }
 
+async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit, timeoutMs: number) {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+
+  try {
+    return await fetch(input, { ...init, signal: controller.signal })
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 function contentForCard(card: Doc<"cards">) {
   return (card.editedContent ?? card.draftContent).trim()
 }
@@ -111,7 +122,7 @@ async function submitToReddit(
         thing_id: `t3_${surfacedPost.redditPostId}`,
         text: content,
       })
-      const response = await fetch("https://oauth.reddit.com/api/comment", {
+      const response = await fetchWithTimeout("https://oauth.reddit.com/api/comment", {
         method: "POST",
         headers: {
           Authorization: `Bearer ${token}`,
@@ -119,7 +130,7 @@ async function submitToReddit(
           "User-Agent": userAgent,
         },
         body,
-      })
+      }, 10_000)
 
       return { ok: response.ok, status: response.status, json: await response.json() }
     }
@@ -135,7 +146,7 @@ async function submitToReddit(
       title,
       text,
     })
-    const response = await fetch("https://oauth.reddit.com/api/submit", {
+    const response = await fetchWithTimeout("https://oauth.reddit.com/api/submit", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${token}`,
@@ -143,7 +154,7 @@ async function submitToReddit(
         "User-Agent": userAgent,
       },
       body,
-    })
+    }, 10_000)
 
     return { ok: response.ok, status: response.status, json: await response.json() }
   })

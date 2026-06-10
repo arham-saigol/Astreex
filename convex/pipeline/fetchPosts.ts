@@ -11,6 +11,27 @@ import { fetchedPostValidator, type FetchedPost } from "./validators"
 const CACHE_TTL_MS = 6 * 60 * 60 * 1000
 const MAX_SELFTEXT_LENGTH = 8_000
 
+async function fetchWithTimeout(
+  input: RequestInfo | URL,
+  init: RequestInit,
+  timeoutMs: number,
+  label: string,
+) {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+
+  try {
+    return await fetch(input, { ...init, signal: controller.signal })
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new Error(`${label} timed out`)
+    }
+    throw error
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 function normalizeSubredditName(name: string) {
   const normalized = name.replace(/^r\//i, "").trim().toLowerCase()
   if (!/^[a-z0-9_]{3,21}$/.test(normalized)) return null
@@ -71,7 +92,7 @@ function parseRedditListing(subreddit: string, payload: unknown): FetchedPost[] 
 
     const redditPostId = "id" in data ? String(data.id) : ""
     const title = "title" in data ? String(data.title) : ""
-    const url = "url" in data ? String(data.url) : ""
+    const url = "url" in data && typeof data.url === "string" ? data.url : ""
     const score = "score" in data && typeof data.score === "number" ? data.score : 0
     const commentCount =
       "num_comments" in data && typeof data.num_comments === "number"
@@ -86,7 +107,7 @@ function parseRedditListing(subreddit: string, payload: unknown): FetchedPost[] 
         ? `https://www.reddit.com${data.permalink}`
         : undefined
 
-    if (!redditPostId || !title || !createdUtc) continue
+    if (!redditPostId || !title || !url || !createdUtc) continue
 
     posts.push({
       redditPostId,
@@ -194,43 +215,53 @@ export const fetchRedditPosts = internalAction({
     let appAccessToken: string | null = null
 
     for (const subredditName of uniqueNames) {
-      const now = Date.now()
-      const cached: FetchedPost[] | null = await ctx.runQuery(
-        internal.pipeline.fetchPosts.loadCachedSubreddit,
-        { subredditName, now },
-      )
-
-      if (cached) {
-        posts.push(...cached)
-        continue
-      }
-
-      appAccessToken ??= await getAppAccessToken()
-
-      const fetched = await withRateLimit(ctx, 3, async () => {
-        const response = await fetch(
-          `https://oauth.reddit.com/r/${subredditName}/new.json?limit=100`,
-          {
-            headers: {
-              Authorization: `Bearer ${appAccessToken}`,
-              "User-Agent": "astreex/0.1",
-            },
-          },
+      try {
+        const now = Date.now()
+        const cached: FetchedPost[] | null = await ctx.runQuery(
+          internal.pipeline.fetchPosts.loadCachedSubreddit,
+          { subredditName, now },
         )
 
-        if (!response.ok) {
-          throw new Error(`Failed to fetch r/${subredditName}`)
+        if (cached) {
+          posts.push(...cached)
+          continue
         }
 
-        return parseRedditListing(subredditName, await response.json())
-      })
+        appAccessToken ??= await getAppAccessToken()
 
-      await ctx.runMutation(internal.pipeline.fetchPosts.upsertSubredditCache, {
-        subredditName,
-        posts: fetched,
-        fetchedAt: now,
-      })
-      posts.push(...fetched)
+        const fetched = await withRateLimit(ctx, 3, async () => {
+          const response = await fetchWithTimeout(
+            `https://oauth.reddit.com/r/${subredditName}/new.json?limit=100`,
+            {
+              headers: {
+                Authorization: `Bearer ${appAccessToken}`,
+                "User-Agent": "astreex/0.1",
+              },
+            },
+            10_000,
+            `Fetch r/${subredditName}`,
+          )
+
+          if (!response.ok) {
+            throw new Error(`Failed to fetch r/${subredditName}`)
+          }
+
+          return parseRedditListing(subredditName, await response.json())
+        })
+
+        await ctx.runMutation(internal.pipeline.fetchPosts.upsertSubredditCache, {
+          subredditName,
+          posts: fetched,
+          fetchedAt: now,
+        })
+        posts.push(...fetched)
+      } catch (error) {
+        console.warn(
+          `Skipping r/${subredditName}: ${
+            error instanceof Error ? error.message : "fetch failed"
+          }`,
+        )
+      }
     }
 
     return posts

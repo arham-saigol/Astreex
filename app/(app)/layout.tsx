@@ -1,6 +1,6 @@
 "use client"
 
-import type { ReactNode } from "react"
+import { useEffect, type ReactNode } from "react"
 import { useRouter } from "next/navigation"
 import { useQuery } from "convex/react"
 import { api } from "@/convex/_generated/api"
@@ -13,6 +13,14 @@ import { Sidebar } from "@/components/sidebar"
 function OnboardingGate({ children }: { children: ReactNode }) {
   const router = useRouter()
   const status = useQuery(api.onboarding.getOnboardingStatus)
+  const shouldRedirect =
+    status !== undefined && status.isAuthenticated && !status.hasCompletedOnboarding
+
+  useEffect(() => {
+    if (shouldRedirect) {
+      router.replace("/onboarding")
+    }
+  }, [router, shouldRedirect])
 
   // Loading — show nothing to avoid flash
   if (status === undefined) {
@@ -25,10 +33,7 @@ function OnboardingGate({ children }: { children: ReactNode }) {
   }
 
   // Hasn't completed onboarding — redirect
-  if (!status.hasCompletedOnboarding) {
-    router.replace("/onboarding")
-    return null
-  }
+  if (shouldRedirect) return null
 
   return <>{children}</>
 }

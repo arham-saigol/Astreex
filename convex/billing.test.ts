@@ -1,7 +1,7 @@
 /// <reference types="vite/client" />
 
 import { convexTest } from "convex-test"
-import { afterEach, describe, expect, test, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest"
 import { api, internal } from "./_generated/api"
 import type { Id } from "./_generated/dataModel"
 import { getPlanLimits } from "./lib/planLimits"
@@ -11,6 +11,20 @@ const modules = import.meta.glob("./**/*.ts")
 
 afterEach(() => {
   vi.unstubAllEnvs()
+})
+
+function stubRequiredEnv() {
+  vi.stubEnv("DEEPSEEK_API_KEY", "test")
+  vi.stubEnv("REDDIT_CLIENT_ID", "client")
+  vi.stubEnv("REDDIT_CLIENT_SECRET", "secret")
+  vi.stubEnv(
+    "REDDIT_TOKEN_ENCRYPTION_KEY",
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  )
+}
+
+beforeEach(() => {
+  stubRequiredEnv()
 })
 
 async function seedBillingProject(
@@ -228,7 +242,45 @@ describe("Creem webhook handling", () => {
 })
 
 describe("starter enforcement", () => {
+  test("duplicate subreddit detection works past the first 200 rows", async () => {
+    const t = convexTest(schema, modules)
+    const { projectId } = await seedBillingProject(t, {
+      plan: "scale",
+      planStatus: "active",
+    })
+
+    await t.run(async (ctx) => {
+      for (let index = 0; index < 200; index++) {
+        await ctx.db.insert("subreddits", {
+          projectId,
+          name: `seeded_${index}`,
+          relevanceScore: 50,
+          reasoning: "Seeded",
+          active: false,
+          addedBy: "user",
+          createdAt: Date.now() + index,
+        })
+      }
+      await ctx.db.insert("subreddits", {
+        projectId,
+        name: "targetsub",
+        relevanceScore: 50,
+        reasoning: "Seeded",
+        active: false,
+        addedBy: "user",
+        createdAt: Date.now() + 201,
+      })
+    })
+
+    await expect(
+      t.withIdentity({ subject: "user_1" }).mutation(api.subreddits.addSubreddit, {
+        name: "targetsub",
+      }),
+    ).rejects.toThrow("DUPLICATE")
+  })
+
   test("starter cannot add an 11th active subreddit", async () => {
+    stubRequiredEnv()
     const t = convexTest(schema, modules)
     const { projectId } = await seedBillingProject(t, {
       plan: "starter",
@@ -246,6 +298,7 @@ describe("starter enforcement", () => {
   })
 
   test("starter cannot connect a second Reddit account", async () => {
+    stubRequiredEnv()
     const t = convexTest(schema, modules)
     const { projectId } = await seedBillingProject(t, {
       plan: "starter",
@@ -253,11 +306,16 @@ describe("starter enforcement", () => {
     })
     await seedActiveAccounts(t, projectId, 1)
 
-    await expect(
-      t.withIdentity({ subject: "user_1" }).query(
-        api.reddit.getOAuthAuthorizationContext,
-        { projectId },
-      ),
-    ).rejects.toThrow("Reddit account limit reached for this plan")
+    const context = await t.withIdentity({ subject: "user_1" }).query(
+      api.reddit.getOAuthAuthorizationContext,
+      { projectId },
+    )
+
+    expect(context).toMatchObject({
+      canAddAccount: false,
+      accountLimit: 1,
+      usedAccounts: 1,
+      message: "Reddit account limit reached for this plan",
+    })
   })
 })

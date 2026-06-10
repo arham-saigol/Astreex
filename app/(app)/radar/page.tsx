@@ -475,9 +475,6 @@ export default function RadarPage() {
             Add subreddit
           </Button>
         </div>
-        {showAddInput && (
-          <AddSubredditInput onDone={() => setShowAddInput(false)} />
-        )}
         <ManualSubredditNotice status={radarStatus} />
         <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-border px-6 py-16 text-center">
           <p className="text-sm font-medium text-text-primary">

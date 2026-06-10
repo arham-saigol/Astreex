@@ -18,6 +18,10 @@ function randomState() {
   return Buffer.from(bytes).toString("base64url")
 }
 
+function isSyntacticallyValidConvexId(value: string) {
+  return /^[a-z0-9]{16,64}$/i.test(value)
+}
+
 export async function GET(request: NextRequest) {
   const clientId = process.env.REDDIT_CLIENT_ID
   const redirectUri = process.env.REDDIT_REDIRECT_URI
@@ -36,11 +40,24 @@ export async function GET(request: NextRequest) {
     )
   }
 
+  if (!isSyntacticallyValidConvexId(projectId)) {
+    return new NextResponse("Invalid projectId", { status: 400 })
+  }
+
   const { client, response } = await getAuthedConvexClient(request)
   if (!client) return response
 
   try {
-    await verifyOAuthProject(client, projectId as Id<"projects">)
+    const context = await verifyOAuthProject(client, projectId as Id<"projects">)
+    if (!context.canAddAccount) {
+      return NextResponse.redirect(
+        errorRedirectTarget(
+          request,
+          returnTo,
+          context.message ?? "Reddit account limit reached for this plan",
+        ),
+      )
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : "Project is not authorized"
     return NextResponse.redirect(errorRedirectTarget(request, returnTo, message))

@@ -11,6 +11,7 @@ interface Props {
   onComplete: () => void
   onConnectReddit: () => Promise<void>
   isSubmitting: boolean
+  error: string | null
 }
 
 const planSlots: Record<Plan, number> = {
@@ -25,6 +26,7 @@ export function StepReddit({
   onComplete,
   onConnectReddit,
   isSubmitting,
+  error,
 }: Props) {
   const [isConnecting, setIsConnecting] = useState(false)
   const maxSlots = planSlots[data.plan]
@@ -107,7 +109,7 @@ export function StepReddit({
       </div>
 
       <div className="flex gap-3 pt-2">
-        <Button type="button" variant="ghost" size="lg" onClick={onBack}>
+        <Button type="button" variant="ghost" size="lg" onClick={onBack} aria-label="Go back">
           <ArrowLeft className="size-4" />
         </Button>
         <Button
@@ -120,13 +122,14 @@ export function StepReddit({
           {isSubmitting ? "Setting up…" : "Start my trial"}
         </Button>
       </div>
+      {error ? <p className="text-center text-xs text-error">{error}</p> : null}
 
       {/* Skip link */}
       <div className="text-center">
         <button
           type="button"
           onClick={onComplete}
-          disabled={isSubmitting}
+          disabled={!hasAtLeastOne || isSubmitting}
           className="text-xs text-text-tertiary underline-offset-2 transition-colors hover:text-text-secondary hover:underline disabled:opacity-50"
         >
           Skip for now — I&apos;ll connect later

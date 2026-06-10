@@ -10,6 +10,7 @@ interface Props {
   onNext: () => void
   onBack: () => void
   isPreparing: boolean
+  error: string | null
 }
 
 const plans: {
@@ -55,7 +56,7 @@ const plans: {
   },
 ]
 
-export function StepPlan({ data, updateData, onNext, onBack, isPreparing }: Props) {
+export function StepPlan({ data, updateData, onNext, onBack, isPreparing, error }: Props) {
   const selectedPlan = plans.find((p) => p.id === data.plan)
 
   return (
@@ -128,7 +129,7 @@ export function StepPlan({ data, updateData, onNext, onBack, isPreparing }: Prop
       </div>
 
       <div className="flex gap-3 pt-2">
-        <Button type="button" variant="ghost" size="lg" onClick={onBack}>
+        <Button type="button" variant="ghost" size="lg" onClick={onBack} aria-label="Go back">
           <ArrowLeft className="size-4" />
         </Button>
         <Button
@@ -141,6 +142,7 @@ export function StepPlan({ data, updateData, onNext, onBack, isPreparing }: Prop
           {isPreparing ? "Preparing..." : `Continue with ${selectedPlan?.name}`}
         </Button>
       </div>
+      {error ? <p className="text-center text-xs text-error">{error}</p> : null}
     </div>
   )
 }

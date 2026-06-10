@@ -2,6 +2,20 @@ import { v } from "convex/values"
 import { internalQuery } from "../_generated/server"
 import { getPlanLimits } from "../lib/planLimits"
 
+export function isValidBrandProfile(profileJson: string) {
+  try {
+    const parsed = JSON.parse(profileJson)
+    return (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      !Array.isArray(parsed) &&
+      Object.keys(parsed).length > 0
+    )
+  } catch {
+    return false
+  }
+}
+
 export const getProjectReadiness = internalQuery({
   args: {
     projectId: v.id("projects"),
@@ -17,7 +31,7 @@ export const getProjectReadiness = internalQuery({
       .query("brands")
       .withIndex("by_projectId", (q) => q.eq("projectId", args.projectId))
       .first()
-    if (!brand || brand.profileJson.trim() === "{}") {
+    if (!brand || !isValidBrandProfile(brand.profileJson)) {
       return { ready: false as const, reason: "missing_brand_profile" }
     }
 
@@ -85,7 +99,7 @@ export const loadFilterContext = internalQuery({
       .query("brands")
       .withIndex("by_projectId", (q) => q.eq("projectId", args.projectId))
       .first()
-    if (!brand || brand.profileJson.trim() === "{}") {
+    if (!brand || !isValidBrandProfile(brand.profileJson)) {
       throw new Error("Brand profile is missing")
     }
 
@@ -123,7 +137,7 @@ export const loadReplyDraftContext = internalQuery({
       .first()
     const post = await ctx.db.get(args.surfacedPostId)
 
-    if (!brand || brand.profileJson.trim() === "{}") {
+    if (!brand || !isValidBrandProfile(brand.profileJson)) {
       throw new Error("Brand profile is missing")
     }
     if (!post || post.projectId !== args.projectId) {
@@ -152,7 +166,7 @@ export const loadOriginalDraftContext = internalQuery({
       .query("brands")
       .withIndex("by_projectId", (q) => q.eq("projectId", args.projectId))
       .first()
-    if (!brand || brand.profileJson.trim() === "{}") {
+    if (!brand || !isValidBrandProfile(brand.profileJson)) {
       throw new Error("Brand profile is missing")
     }
 
@@ -202,7 +216,7 @@ export const loadJudgeContext = internalQuery({
       .query("brands")
       .withIndex("by_projectId", (q) => q.eq("projectId", args.projectId))
       .first()
-    if (!brand || brand.profileJson.trim() === "{}") {
+    if (!brand || !isValidBrandProfile(brand.profileJson)) {
       throw new Error("Brand profile is missing")
     }
 

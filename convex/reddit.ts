@@ -19,6 +19,27 @@ type TokenRow = {
   tokenExpiresAt: number
 }
 
+async function fetchWithTimeout(
+  input: RequestInfo | URL,
+  init: RequestInit,
+  timeoutMs: number,
+  label: string,
+) {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+
+  try {
+    return await fetch(input, { ...init, signal: controller.signal })
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new Error(`${label} timed out`)
+    }
+    throw error
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 async function getCurrentUser(ctx: QueryCtx | MutationCtx) {
   const identity = await ctx.auth.getUserIdentity()
   if (!identity) throw new Error("Not authenticated")
@@ -116,13 +137,21 @@ async function decryptToken(payload: string) {
   return new TextDecoder().decode(plaintext)
 }
 
-async function countActiveProjectAccounts(ctx: QueryCtx | MutationCtx, projectId: Id<"projects">) {
-  const accounts = await ctx.db
+async function loadActiveProjectAccounts(
+  ctx: QueryCtx | MutationCtx,
+  projectId: Id<"projects">,
+  limit: number,
+) {
+  const activeAccounts = []
+  for await (const account of ctx.db
     .query("redditAccounts")
-    .withIndex("by_projectId", (q) => q.eq("projectId", projectId))
-    .take(20)
+    .withIndex("by_projectId", (q) => q.eq("projectId", projectId))) {
+    if (!account.isActive) continue
+    activeAccounts.push(account)
+    if (activeAccounts.length >= limit) break
+  }
 
-  return accounts.filter((account) => account.isActive)
+  return activeAccounts
 }
 
 async function refreshTokenForAccount(
@@ -147,15 +176,20 @@ async function refreshTokenForAccount(
     refresh_token: refreshToken,
   })
 
-  const response = await fetch("https://www.reddit.com/api/v1/access_token", {
-    method: "POST",
-    headers: {
-      Authorization: `Basic ${btoa(`${clientId}:${clientSecret}`)}`,
-      "Content-Type": "application/x-www-form-urlencoded",
-      "User-Agent": "astreex/0.1",
+  const response = await fetchWithTimeout(
+    "https://www.reddit.com/api/v1/access_token",
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Basic ${btoa(`${clientId}:${clientSecret}`)}`,
+        "Content-Type": "application/x-www-form-urlencoded",
+        "User-Agent": "astreex/0.1",
+      },
+      body,
     },
-    body,
-  })
+    10_000,
+    "Reddit token refresh",
+  )
 
   if (!response.ok) {
     throw new Error("Failed to refresh Reddit token")
@@ -193,16 +227,21 @@ export const getOAuthAuthorizationContext = query({
   handler: async (ctx, args) => {
     const project = await getOwnedProject(ctx, args.projectId)
     const accountLimit = getPlanLimits(project.plan).maxRedditAccounts
-    const accounts = await countActiveProjectAccounts(ctx, args.projectId)
-
-    if (accounts.length >= accountLimit) {
-      throw new Error("Reddit account limit reached for this plan")
-    }
+    const accounts = await loadActiveProjectAccounts(
+      ctx,
+      args.projectId,
+      accountLimit + 1,
+    )
+    const canAddAccount = accounts.length < accountLimit
 
     return {
       projectId: project._id,
+      canAddAccount,
       accountLimit,
       usedAccounts: accounts.length,
+      ...(canAddAccount
+        ? {}
+        : { message: "Reddit account limit reached for this plan" }),
     }
   },
 })
@@ -233,7 +272,11 @@ export const upsertOAuthAccount = mutation({
 
     if (existing) {
       if (!existing.isActive) {
-        const accounts = await countActiveProjectAccounts(ctx, args.projectId)
+        const accounts = await loadActiveProjectAccounts(
+          ctx,
+          args.projectId,
+          accountLimit,
+        )
         if (accounts.length >= accountLimit) {
           throw new Error("Reddit account limit reached for this plan")
         }
@@ -250,7 +293,11 @@ export const upsertOAuthAccount = mutation({
       return { redditAccountId: existing._id }
     }
 
-    const accounts = await countActiveProjectAccounts(ctx, args.projectId)
+    const accounts = await loadActiveProjectAccounts(
+      ctx,
+      args.projectId,
+      accountLimit,
+    )
     if (accounts.length >= accountLimit) {
       throw new Error("Reddit account limit reached for this plan")
     }

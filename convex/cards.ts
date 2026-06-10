@@ -52,7 +52,7 @@ function localMidnightUtcMs(timeZone: string, date: Date) {
 }
 
 function randomFiveToTenMinutes() {
-  return FIVE_MINUTES_MS + Math.floor(Math.random() * FIVE_MINUTES_MS)
+  return FIVE_MINUTES_MS + 1 + Math.floor(Math.random() * (FIVE_MINUTES_MS - 1))
 }
 
 async function findScheduledSpacingConflicts(
@@ -277,6 +277,10 @@ export const declineCard = mutation({
       throw new Error("Not authorized")
     }
 
+    if (card.status !== "pending") {
+      throw new Error("Only pending cards can be declined")
+    }
+
     await ctx.db.patch(args.cardId, {
       status: "declined",
     })
@@ -303,13 +307,6 @@ async function expireStaleCardsBatch(ctx: MutationCtx, scheduleNext: boolean) {
 
   return { expired: staleCards.length }
 }
-
-export const expireStaleCards = mutation({
-  args: {},
-  handler: async (ctx) => {
-    return await expireStaleCardsBatch(ctx, false)
-  },
-})
 
 export const expireStaleCardsInternal = internalMutation({
   args: {},
