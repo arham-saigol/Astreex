@@ -9,7 +9,7 @@ import {
   type CreemBillingInterval,
   type CreemPlan,
 } from "@/lib/creemProducts"
-import { getAuthedConvexClient } from "../../reddit/oauth"
+import { getAuthedConvexClient } from "../../convex-client"
 
 export const runtime = "nodejs"
 

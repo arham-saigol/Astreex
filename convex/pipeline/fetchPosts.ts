@@ -5,32 +5,11 @@ import {
   internalMutation,
   internalQuery,
 } from "../_generated/server"
-import { withRateLimit } from "../lib/rateLimiter"
+import { communityPosts, type FetchLayerPost } from "../lib/fetchLayer"
 import { fetchedPostValidator, type FetchedPost } from "./validators"
 
 const CACHE_TTL_MS = 6 * 60 * 60 * 1000
 const MAX_SELFTEXT_LENGTH = 8_000
-
-async function fetchWithTimeout(
-  input: RequestInfo | URL,
-  init: RequestInit,
-  timeoutMs: number,
-  label: string,
-) {
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), timeoutMs)
-
-  try {
-    return await fetch(input, { ...init, signal: controller.signal })
-  } catch (error) {
-    if (error instanceof DOMException && error.name === "AbortError") {
-      throw new Error(`${label} timed out`)
-    }
-    throw error
-  } finally {
-    clearTimeout(timer)
-  }
-}
 
 function normalizeSubredditName(name: string) {
   const normalized = name.replace(/^r\//i, "").trim().toLowerCase()
@@ -45,75 +24,66 @@ function trimSelftext(value: unknown) {
   return trimmed.slice(0, MAX_SELFTEXT_LENGTH)
 }
 
-async function getAppAccessToken() {
-  const clientId = process.env.REDDIT_CLIENT_ID
-  const clientSecret = process.env.REDDIT_CLIENT_SECRET
-  if (!clientId || !clientSecret) {
-    throw new Error("Reddit OAuth is not configured")
+function createdUtcMs(post: FetchLayerPost) {
+  if (typeof post.createdUtc === "number") {
+    return post.createdUtc > 10_000_000_000 ? post.createdUtc : post.createdUtc * 1000
   }
-
-  const response = await fetch("https://www.reddit.com/api/v1/access_token", {
-    method: "POST",
-    headers: {
-      Authorization: `Basic ${btoa(`${clientId}:${clientSecret}`)}`,
-      "Content-Type": "application/x-www-form-urlencoded",
-      "User-Agent": "astreex/0.1",
-    },
-    body: new URLSearchParams({ grant_type: "client_credentials" }),
-  })
-
-  if (!response.ok) {
-    throw new Error("Failed to create Reddit app access token")
+  if (typeof post.created_utc === "number") {
+    return post.created_utc > 10_000_000_000
+      ? post.created_utc
+      : post.created_utc * 1000
   }
-
-  const body = (await response.json()) as { access_token?: string }
-  if (!body.access_token) throw new Error("Reddit app token response was incomplete")
-  return body.access_token
+  if (typeof post.createdAt === "number") return post.createdAt
+  if (typeof post.createdAt === "string") {
+    const parsed = Date.parse(post.createdAt)
+    return Number.isNaN(parsed) ? 0 : parsed
+  }
+  return 0
 }
 
-function parseRedditListing(subreddit: string, payload: unknown): FetchedPost[] {
-  const children =
-    typeof payload === "object" && payload !== null &&
-    "data" in payload &&
-    typeof payload.data === "object" && payload.data !== null &&
-    "children" in payload.data &&
-    Array.isArray(payload.data.children)
-      ? payload.data.children
-      : []
+function absoluteRedditUrl(value: string | undefined) {
+  if (!value) return undefined
+  if (value.startsWith("http://") || value.startsWith("https://")) return value
+  if (value.startsWith("/")) return `https://www.reddit.com${value}`
+  return value
+}
 
+function parseFetchLayerPosts(subreddit: string, payload: FetchLayerPost[]): FetchedPost[] {
   const posts: FetchedPost[] = []
 
-  for (const child of children) {
-    const data =
-      typeof child === "object" && child !== null && "data" in child
-        ? child.data
-        : null
-    if (typeof data !== "object" || data === null) continue
-
-    const redditPostId = "id" in data ? String(data.id) : ""
-    const title = "title" in data ? String(data.title) : ""
-    const url = "url" in data && typeof data.url === "string" ? data.url : ""
-    const score = "score" in data && typeof data.score === "number" ? data.score : 0
+  for (const item of payload) {
+    const redditThingId =
+      typeof item.fullname === "string"
+        ? item.fullname
+        : typeof item.name === "string"
+          ? item.name
+          : undefined
+    const redditPostId =
+      item.id ??
+      (redditThingId?.includes("_") ? redditThingId.split("_")[1] : undefined) ??
+      ""
+    const title = item.title ?? ""
+    const url = absoluteRedditUrl(item.url) ?? absoluteRedditUrl(item.permalink) ?? ""
+    const score = typeof item.score === "number" ? item.score : 0
     const commentCount =
-      "num_comments" in data && typeof data.num_comments === "number"
-        ? data.num_comments
-        : 0
-    const createdUtc =
-      "created_utc" in data && typeof data.created_utc === "number"
-        ? data.created_utc * 1000
-        : 0
-    const permalink =
-      "permalink" in data && typeof data.permalink === "string"
-        ? `https://www.reddit.com${data.permalink}`
-        : undefined
+      typeof item.numComments === "number"
+        ? item.numComments
+        : typeof item.num_comments === "number"
+          ? item.num_comments
+          : typeof item.commentCount === "number"
+            ? item.commentCount
+            : 0
+    const createdUtc = createdUtcMs(item)
+    const permalink = absoluteRedditUrl(item.permalink)
 
     if (!redditPostId || !title || !url || !createdUtc) continue
 
     posts.push({
       redditPostId,
+      redditThingId: redditThingId ?? `t3_${redditPostId}`,
       subreddit,
       title,
-      selftext: trimSelftext("selftext" in data ? data.selftext : undefined),
+      selftext: trimSelftext(item.selftext ?? item.body ?? item.text),
       permalink,
       url,
       score,
@@ -140,8 +110,9 @@ export const loadCachedSubreddit = internalQuery({
 
     if (!cache || cache.expiresAt <= args.now) return null
 
-    return cache.posts.map((post) => ({
+      return cache.posts.map((post) => ({
       redditPostId: post.id,
+      redditThingId: post.redditThingId,
       subreddit: cache.subredditName,
       title: post.title,
       selftext: post.selftext,
@@ -170,6 +141,7 @@ export const upsertSubredditCache = internalMutation({
 
     const posts = args.posts.map((post) => ({
       id: post.redditPostId,
+      redditThingId: post.redditThingId,
       title: post.title,
       selftext: post.selftext,
       permalink: post.permalink,
@@ -212,8 +184,6 @@ export const fetchRedditPosts = internalAction({
     ]
 
     const posts: FetchedPost[] = []
-    let appAccessToken: string | null = null
-
     for (const subredditName of uniqueNames) {
       try {
         const now = Date.now()
@@ -227,27 +197,10 @@ export const fetchRedditPosts = internalAction({
           continue
         }
 
-        appAccessToken ??= await getAppAccessToken()
-
-        const fetched = await withRateLimit(ctx, 3, async () => {
-          const response = await fetchWithTimeout(
-            `https://oauth.reddit.com/r/${subredditName}/new.json?limit=100`,
-            {
-              headers: {
-                Authorization: `Bearer ${appAccessToken}`,
-                "User-Agent": "astreex/0.1",
-              },
-            },
-            10_000,
-            `Fetch r/${subredditName}`,
-          )
-
-          if (!response.ok) {
-            throw new Error(`Failed to fetch r/${subredditName}`)
-          }
-
-          return parseRedditListing(subredditName, await response.json())
-        })
+        const fetched = parseFetchLayerPosts(
+          subredditName,
+          await communityPosts(ctx, subredditName, { sort: "new", limit: 100 }),
+        )
 
         await ctx.runMutation(internal.pipeline.fetchPosts.upsertSubredditCache, {
           subredditName,

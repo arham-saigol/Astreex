@@ -22,12 +22,8 @@ afterEach(() => {
 
 function stubRequiredEnv() {
   vi.stubEnv("DEEPSEEK_API_KEY", "test")
-  vi.stubEnv("REDDIT_CLIENT_ID", "client")
-  vi.stubEnv("REDDIT_CLIENT_SECRET", "secret")
-  vi.stubEnv(
-    "REDDIT_TOKEN_ENCRYPTION_KEY",
-    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-  )
+  vi.stubEnv("ZERNIO_API_KEY", "zernio")
+  vi.stubEnv("FETCHLAYER_API_KEY", "fetchlayer")
 }
 
 beforeEach(() => {
@@ -68,9 +64,8 @@ async function seedRedditAccount(
     return await ctx.db.insert("redditAccounts", {
       projectId,
       redditUsername: overrides.redditUsername ?? "founder1",
-      accessToken: "encrypted",
-      refreshToken: "encrypted",
-      tokenExpiresAt: Date.now() + 60_000,
+      zernioAccountId: `zernio_${overrides.redditUsername ?? "founder1"}`,
+      providerCanPost: true,
       isActive: overrides.isActive ?? true,
       healthStatus: overrides.healthStatus ?? "healthy",
       createdAt: Date.now(),
@@ -285,9 +280,8 @@ describe("pipeline Convex mutations", () => {
       const account1 = await ctx.db.insert("redditAccounts", {
         projectId,
         redditUsername: "founder1",
-        accessToken: "encrypted",
-        refreshToken: "encrypted",
-        tokenExpiresAt: Date.now() + 60_000,
+        zernioAccountId: "zernio_founder1",
+        providerCanPost: true,
         isActive: true,
         healthStatus: "healthy",
         createdAt: Date.now(),
@@ -295,9 +289,8 @@ describe("pipeline Convex mutations", () => {
       const account2 = await ctx.db.insert("redditAccounts", {
         projectId,
         redditUsername: "founder2",
-        accessToken: "encrypted",
-        refreshToken: "encrypted",
-        tokenExpiresAt: Date.now() + 60_000,
+        zernioAccountId: "zernio_founder2",
+        providerCanPost: true,
         isActive: true,
         healthStatus: "healthy",
         createdAt: Date.now(),
@@ -375,9 +368,8 @@ describe("pipeline Convex mutations", () => {
       const redditAccountId = await ctx.db.insert("redditAccounts", {
         projectId,
         redditUsername: "founder1",
-        accessToken: "encrypted",
-        refreshToken: "encrypted",
-        tokenExpiresAt: Date.now() + 60_000,
+        zernioAccountId: "zernio_founder1",
+        providerCanPost: true,
         isActive: true,
         healthStatus: "healthy",
         createdAt: Date.now(),
@@ -704,7 +696,9 @@ describe("account health monitor helpers", () => {
       })
     })
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
-      data: { children: [{ data: { name: "t3_abc", score: 12, num_comments: 4 } }] },
+      id: "abc",
+      score: 12,
+      numComments: 4,
     }))))
 
     await t.action(internal.pipeline.healthMonitor.checkAccountHealth, {
@@ -773,14 +767,14 @@ describe("account health monitor helpers", () => {
         }),
       }
     })
-    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input)
-      if (url.includes("t1_removed")) {
+    vi.stubGlobal("fetch", vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = typeof init?.body === "string" ? init.body : ""
+      if (body.includes("removed")) {
         return new Response(JSON.stringify({
-          data: { children: [{ data: { name: "t1_removed", body: "[removed]" } }] },
+          comments: [{ id: "removed", body: "[removed]" }],
         }))
       }
-      return new Response(JSON.stringify({ data: { children: [] } }))
+      return new Response(JSON.stringify({ comments: [] }))
     }))
 
     await t.action(internal.pipeline.healthMonitor.checkAccountHealth, {

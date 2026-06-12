@@ -485,7 +485,7 @@ function AccountTab({
               disabled={!canConnect}
               onClick={() =>
                 window.location.assign(
-                  `/api/reddit/authorize?projectId=${encodeURIComponent(context.project._id)}&returnTo=settings`,
+                  `/api/zernio/reddit/connect?projectId=${encodeURIComponent(context.project._id)}&returnTo=settings`,
                 )
               }
             >

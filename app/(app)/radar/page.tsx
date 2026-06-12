@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect, useCallback, useRef } from "react"
-import { useQuery, useMutation } from "convex/react"
+import { useAction, useQuery, useMutation } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import { toast } from "sonner"
@@ -274,7 +274,7 @@ function PanelContent({
 function AddSubredditInput({ onDone }: { onDone: () => void }) {
   const [value, setValue] = useState("")
   const [loading, setLoading] = useState(false)
-  const addSubreddit = useMutation(api.subreddits.addSubreddit)
+  const addSubreddit = useAction(api.subreddits.addSubreddit)
   const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {

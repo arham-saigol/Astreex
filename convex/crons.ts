@@ -100,6 +100,7 @@ const crons = cronJobs()
 crons.cron("hourly timezone check", "0 * * * *", internal.crons.checkTimezones, {})
 crons.cron("daily stale card expiration", "0 0 * * *", internal.cards.expireStaleCardsInternal, {})
 crons.cron("daily account health monitor", "0 22 * * *", internal.pipeline.healthMonitor.checkAccountHealth, {})
+crons.cron("daily provider health sync", "30 22 * * *", internal.pipeline.healthMonitor.syncZernioProviderHealth, {})
 crons.cron("daily stale pipeline cleanup", "0 3 * * *", internal.pipeline.cleanup.cleanupStaleData, {})
 
 export default crons

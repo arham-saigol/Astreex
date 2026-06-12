@@ -10,12 +10,8 @@ const modules = import.meta.glob("./**/*.ts")
 
 function stubRequiredEnv() {
   vi.stubEnv("DEEPSEEK_API_KEY", "test")
-  vi.stubEnv("REDDIT_CLIENT_ID", "client")
-  vi.stubEnv("REDDIT_CLIENT_SECRET", "secret")
-  vi.stubEnv(
-    "REDDIT_TOKEN_ENCRYPTION_KEY",
-    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-  )
+  vi.stubEnv("ZERNIO_API_KEY", "zernio")
+  vi.stubEnv("FETCHLAYER_API_KEY", "fetchlayer")
 }
 
 beforeEach(() => {
@@ -112,9 +108,8 @@ describe("settings mutations", () => {
       const redditAccountId = await ctx.db.insert("redditAccounts", {
         projectId,
         redditUsername: "founder",
-        accessToken: "encrypted",
-        refreshToken: "encrypted",
-        tokenExpiresAt: Date.now() + 60_000,
+        zernioAccountId: "zernio_founder",
+        providerCanPost: true,
         isActive: true,
         healthStatus: "healthy",
         createdAt: Date.now(),

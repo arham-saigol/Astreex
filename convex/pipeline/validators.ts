@@ -3,6 +3,7 @@ import type { Id } from "../_generated/dataModel"
 
 export const fetchedPostValidator = v.object({
   redditPostId: v.string(),
+  redditThingId: v.optional(v.string()),
   subreddit: v.string(),
   title: v.string(),
   selftext: v.optional(v.string()),
@@ -15,6 +16,7 @@ export const fetchedPostValidator = v.object({
 
 export type FetchedPost = {
   redditPostId: string
+  redditThingId?: string
   subreddit: string
   title: string
   selftext?: string

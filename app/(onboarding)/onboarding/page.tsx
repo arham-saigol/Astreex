@@ -128,7 +128,7 @@ export default function OnboardingPage() {
   const handleConnectReddit = useCallback(async () => {
     const projectId = data.projectId ?? (await ensureDraftProject())
     window.location.assign(
-      `/api/reddit/authorize?projectId=${encodeURIComponent(projectId)}&returnTo=onboarding`,
+      `/api/zernio/reddit/connect?projectId=${encodeURIComponent(projectId)}&returnTo=onboarding`,
     )
   }, [data.projectId, ensureDraftProject])
 

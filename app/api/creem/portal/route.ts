@@ -3,7 +3,7 @@ import { NextResponse, type NextRequest } from "next/server"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import { createCreemClient } from "@/lib/creemClient"
-import { getAuthedConvexClient } from "../../reddit/oauth"
+import { getAuthedConvexClient } from "../../convex-client"
 
 export const runtime = "nodejs"
 
