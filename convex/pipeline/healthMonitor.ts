@@ -1,4 +1,5 @@
 import { v } from "convex/values"
+import { paginationOptsValidator } from "convex/server"
 import { internal } from "../_generated/api"
 import type { Doc, Id } from "../_generated/dataModel"
 import { internalAction, internalMutation, internalQuery } from "../_generated/server"
@@ -25,6 +26,27 @@ type BatchRow = Doc<"postedContent"> & {
   backfillRedditAccountId?: Id<"redditAccounts">
   resolvedType?: "reply" | "original"
   parentUrl?: string
+}
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  mapper: (item: T) => Promise<R>,
+) {
+  const results: R[] = []
+  let nextIndex = 0
+
+  async function worker() {
+    while (nextIndex < items.length) {
+      const index = nextIndex++
+      results[index] = await mapper(items[index])
+    }
+  }
+
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, items.length) }, () => worker()),
+  )
+  return results
 }
 
 function removedOrDeleted(data: {
@@ -145,9 +167,7 @@ export const checkAccountHealth = internalAction({
       const thingId = row.redditThingId ?? `${type === "original" ? "t3" : "t1"}_${row.redditId}`
       const url =
         type === "reply"
-          ? row.parentUrl ??
-            row.permalink ??
-            `https://www.reddit.com/r/${row.subreddit}/comments/${row.redditId}`
+          ? row.parentUrl ?? row.permalink
           : row.permalink ??
             `https://www.reddit.com/r/${row.subreddit}/comments/${row.redditId}`
       if (!url) continue
@@ -242,51 +262,70 @@ export const checkAccountHealth = internalAction({
 export const syncZernioProviderHealth = internalAction({
   args: {},
   handler: async (ctx) => {
-    const accounts: Array<{
-      _id: Id<"redditAccounts">
-      zernioAccountId: string
-    }> = await ctx.runQuery(
-      internal.pipeline.healthMonitor.loadConnectedProviderAccounts,
-      {},
-    )
+    let cursor: string | null = null
+    let isDone = false
 
-    for (const account of accounts) {
-      try {
-        const health = normalizeAccountHealth(
-          await getAccountHealth(ctx, account.zernioAccountId),
-        )
-        await ctx.runMutation(internal.reddit.updateProviderHealth, {
-          redditAccountId: account._id,
-          providerHealthStatus: health.status,
-          providerCanPost: health.canPost,
-          providerNeedsReconnect: health.needsReconnect,
-          providerIssues: health.issues,
-        })
-      } catch (error) {
-        await ctx.runMutation(internal.reddit.updateProviderHealth, {
-          redditAccountId: account._id,
-          providerHealthStatus: "error",
-          providerCanPost: false,
-          providerNeedsReconnect: false,
-          providerIssues: [
-            error instanceof Error ? error.message.slice(0, 240) : "Health check failed",
-          ],
-        })
-      }
+    while (!isDone) {
+      const accounts: {
+        page: Array<{
+          _id: Id<"redditAccounts">
+          zernioAccountId: string
+        }>
+        isDone: boolean
+        continueCursor: string
+      } = await ctx.runQuery(
+        internal.pipeline.healthMonitor.loadConnectedProviderAccounts,
+        { paginationOpts: { numItems: 100, cursor } },
+      )
+
+      await mapWithConcurrency(accounts.page, 5, async (account) => {
+        try {
+          const health = normalizeAccountHealth(
+            await getAccountHealth(ctx, account.zernioAccountId),
+          )
+          await ctx.runMutation(internal.reddit.updateProviderHealth, {
+            redditAccountId: account._id,
+            providerHealthStatus: health.status,
+            providerCanPost: health.canPost,
+            providerNeedsReconnect: health.needsReconnect,
+            providerIssues: health.issues,
+          })
+        } catch (error) {
+          await ctx.runMutation(internal.reddit.updateProviderHealth, {
+            redditAccountId: account._id,
+            providerHealthStatus: "error",
+            providerCanPost: false,
+            providerNeedsReconnect: false,
+            providerIssues: [
+              error instanceof Error ? error.message.slice(0, 240) : "Health check failed",
+            ],
+          })
+        }
+      })
+
+      cursor = accounts.continueCursor
+      isDone = accounts.isDone
     }
   },
 })
 
 export const loadConnectedProviderAccounts = internalQuery({
-  args: {},
-  handler: async (ctx) => {
-    const rows = await ctx.db.query("redditAccounts").take(200)
-    return rows
-      .filter((row) => row.isActive)
-      .map((row) => ({
-        _id: row._id,
-        zernioAccountId: row.zernioAccountId,
-      }))
+  args: {
+    paginationOpts: paginationOptsValidator,
+  },
+  handler: async (ctx, args) => {
+    const rows = await ctx.db
+      .query("redditAccounts")
+      .paginate(args.paginationOpts)
+    return {
+      ...rows,
+      page: rows.page
+        .filter((row) => row.isActive)
+        .map((row) => ({
+          _id: row._id,
+          zernioAccountId: row.zernioAccountId,
+        })),
+    }
   },
 })
 

@@ -184,38 +184,65 @@ export const fetchRedditPosts = internalAction({
     ]
 
     const posts: FetchedPost[] = []
-    for (const subredditName of uniqueNames) {
-      try {
-        const now = Date.now()
-        const cached: FetchedPost[] | null = await ctx.runQuery(
-          internal.pipeline.fetchPosts.loadCachedSubreddit,
-          { subredditName, now },
-        )
-
-        if (cached) {
-          posts.push(...cached)
-          continue
+    const now = Date.now()
+    const cachedResults = await Promise.all(
+      uniqueNames.map(async (subredditName) => {
+        try {
+          const cached: FetchedPost[] | null = await ctx.runQuery(
+            internal.pipeline.fetchPosts.loadCachedSubreddit,
+            { subredditName, now },
+          )
+          return { subredditName, cached }
+        } catch (error) {
+          console.warn(
+            `Skipping cache for r/${subredditName}: ${
+              error instanceof Error ? error.message : "cache check failed"
+            }`,
+          )
+          return { subredditName, cached: null }
         }
+      }),
+    )
 
-        const fetched = parseFetchLayerPosts(
-          subredditName,
-          await communityPosts(ctx, subredditName, { sort: "new", limit: 100 }),
-        )
-
-        await ctx.runMutation(internal.pipeline.fetchPosts.upsertSubredditCache, {
-          subredditName,
-          posts: fetched,
-          fetchedAt: now,
-        })
-        posts.push(...fetched)
-      } catch (error) {
-        console.warn(
-          `Skipping r/${subredditName}: ${
-            error instanceof Error ? error.message : "fetch failed"
-          }`,
-        )
+    const cacheMisses: string[] = []
+    for (const result of cachedResults) {
+      if (result.cached) {
+        posts.push(...result.cached)
+      } else {
+        cacheMisses.push(result.subredditName)
       }
     }
+
+    const fetchedResults = await Promise.all(
+      cacheMisses.map(async (subredditName) => {
+        try {
+          const fetched = parseFetchLayerPosts(
+            subredditName,
+            await communityPosts(ctx, subredditName, { sort: "new", limit: 100 }),
+          )
+          return { subredditName, fetched }
+        } catch (error) {
+          console.warn(
+            `Skipping r/${subredditName}: ${
+              error instanceof Error ? error.message : "fetch failed"
+            }`,
+          )
+          return null
+        }
+      }),
+    )
+
+    await Promise.all(
+      fetchedResults.map(async (result) => {
+        if (!result) return
+        await ctx.runMutation(internal.pipeline.fetchPosts.upsertSubredditCache, {
+          subredditName: result.subredditName,
+          posts: result.fetched,
+          fetchedAt: now,
+        })
+        posts.push(...result.fetched)
+      }),
+    )
 
     return posts
   },

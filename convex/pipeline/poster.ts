@@ -246,9 +246,10 @@ export const postToReddit = internalAction({
       if (
         context.card.type === "original" &&
         result.zernioPostId &&
-        !isPublished(result.status) &&
-        !isPublished(result.platformStatus) &&
-        result.status !== undefined
+        (!result.redditId ||
+          (!isPublished(result.status) &&
+            !isPublished(result.platformStatus) &&
+            result.status !== undefined))
       ) {
         await ctx.scheduler.runAfter(
           statusPollMs,
@@ -263,10 +264,14 @@ export const postToReddit = internalAction({
         return null
       }
 
+      if (!result.redditId) {
+        throw new Error("Zernio response did not include Reddit id")
+      }
+
       await ctx.runMutation(internal.pipeline.poster.markPostSucceeded, {
         cardId: args.cardId,
         redditAccountId: account._id,
-        redditId: result.redditId ?? result.zernioPostId ?? "unknown",
+        redditId: result.redditId,
         redditThingId: result.redditThingId,
         zernioPostId: result.zernioPostId,
         permalink: result.permalink,
@@ -275,6 +280,7 @@ export const postToReddit = internalAction({
       const message = error instanceof Error ? error.message : "Zernio post failed"
       const status = error instanceof ProviderHttpError ? error.status : undefined
       const isRetryable =
+        (error instanceof ProviderHttpError && error.retryable) ||
         status === 429 ||
         status === 500 ||
         status === 502 ||
@@ -318,7 +324,12 @@ export const pollZernioPostStatus = internalAction({
       internal.pipeline.poster.loadPostContext,
       { cardId: args.cardId },
     )
-    if (!context || context.card.status !== "scheduled") return null
+    if (
+      !context ||
+      (context.card.status !== "scheduled" && context.card.status !== "approved")
+    ) {
+      return null
+    }
 
     try {
       const result = extractCreatedPost(await getPost(ctx, args.zernioPostId))
@@ -364,7 +375,12 @@ export const pollZernioPostStatus = internalAction({
       const status = error instanceof ProviderHttpError ? error.status : undefined
       if (
         pollAttempt < 4 &&
-        (status === 429 || status === 500 || status === 502 || status === 503)
+        ((error instanceof ProviderHttpError && error.retryable) ||
+          status === 429 ||
+          status === 500 ||
+          status === 502 ||
+          status === 503 ||
+          status === 504)
       ) {
         await ctx.scheduler.runAfter(
           statusPollMs,

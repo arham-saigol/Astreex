@@ -126,7 +126,19 @@ export default function OnboardingPage() {
   }, [ensureDraftProject, goNext])
 
   const handleConnectReddit = useCallback(async () => {
-    const projectId = data.projectId ?? (await ensureDraftProject())
+    let projectId = data.projectId
+    if (!projectId) {
+      try {
+        projectId = await ensureDraftProject()
+      } catch (error) {
+        console.error("Project setup failed:", error)
+        const message = error instanceof Error ? error.message : "Project setup failed."
+        setSubmitError(message)
+        toast.error(message)
+        return
+      }
+    }
+    if (!projectId) return
     window.location.assign(
       `/api/zernio/reddit/connect?projectId=${encodeURIComponent(projectId)}&returnTo=onboarding`,
     )

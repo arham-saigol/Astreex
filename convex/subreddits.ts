@@ -10,6 +10,7 @@ import {
 import { getPlanLimits } from "./lib/planLimits"
 import { communityDetails, communityFromDetails } from "./lib/fetchLayer"
 import { validateSubreddit } from "./lib/zernio"
+import { stringifyRulesJson } from "./lib/rules"
 
 const SUBREDDIT_LIMIT_ERROR =
   "You've reached the subreddit limit for your plan. Upgrade to add more."
@@ -145,9 +146,9 @@ function normalizeSubredditName(name: string) {
 }
 
 function validZernioValidation(payload: unknown) {
-  if (!payload || typeof payload !== "object") return true
+  if (!payload || typeof payload !== "object") return false
   const record = payload as Record<string, unknown>
-  return record.valid !== false && record.exists !== false && record.ok !== false
+  return record.valid === true && record.exists === true && record.ok === true
 }
 
 export const loadManualAddContext = internalQuery({
@@ -273,12 +274,16 @@ export const addSubreddit = action({
       { name: args.name },
     )
 
-    const validation = await validateSubreddit(ctx, context.cleanName)
+    const validationPromise = validateSubreddit(ctx, context.cleanName)
+    const detailsPromise = communityDetails(ctx, context.cleanName)
+
+    const validation = await validationPromise
     if (!validZernioValidation(validation)) {
+      void detailsPromise.catch(() => null)
       throw new Error("INVALID_SUBREDDIT_NAME")
     }
 
-    const detailsPayload = await communityDetails(ctx, context.cleanName)
+    const detailsPayload = await detailsPromise
     const details = communityFromDetails(detailsPayload)
     const memberCount =
       typeof details.subscribers === "number"
@@ -299,9 +304,7 @@ export const addSubreddit = action({
       name: context.cleanName,
       memberCount,
       description: description?.slice(0, 1000),
-      rulesJson: details.rules === undefined
-        ? undefined
-        : JSON.stringify(details.rules).slice(0, 20_000),
+      rulesJson: details.rules === undefined ? undefined : stringifyRulesJson(details.rules),
     })
   },
 })

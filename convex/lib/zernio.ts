@@ -14,6 +14,19 @@ export type ZernioAccountHealth = {
   }
 }
 
+export type ZernioAccountDetails = {
+  account?: ZernioAccountDetails
+  _id?: string
+  id?: string
+  accountId?: string
+  username?: string
+  redditUsername?: string
+  profileId?: string
+  profile_id?: string
+  ownerProfileId?: string
+  profile?: string | { _id?: string; id?: string }
+}
+
 export type ZernioPostResponse = {
   post?: {
     _id?: string
@@ -91,6 +104,56 @@ export async function getAccountHealth(ctx: ActionCtx, accountId: string) {
   return await zernioJson<ZernioAccountHealth>(
     ctx,
     `/accounts/${encodeURIComponent(accountId)}/health`,
+  )
+}
+
+export async function createZernioProfile(ctx: ActionCtx, name: string) {
+  const body = await zernioJson<{
+    profile?: { _id?: string; id?: string }
+    _id?: string
+    id?: string
+  }>(ctx, "/profiles", {
+    method: "POST",
+    body: JSON.stringify({
+      name,
+      description: "Astreex Reddit distribution project",
+    }),
+  })
+  const profileId = body.profile?._id ?? body.profile?.id ?? body._id ?? body.id
+  if (!profileId) throw new Error("Zernio profile response was incomplete")
+  return profileId
+}
+
+export async function getAccountDetails(ctx: ActionCtx, accountId: string) {
+  return await zernioJson<ZernioAccountDetails>(
+    ctx,
+    `/accounts/${encodeURIComponent(accountId)}`,
+  )
+}
+
+function accountDetailsBody(account: ZernioAccountDetails): ZernioAccountDetails {
+  return account.account ?? account
+}
+
+export function zernioAccountId(account: ZernioAccountDetails) {
+  const body = accountDetailsBody(account)
+  return body._id ?? body.id ?? body.accountId
+}
+
+export function zernioAccountUsername(account: ZernioAccountDetails) {
+  const body = accountDetailsBody(account)
+  return body.redditUsername ?? body.username
+}
+
+export function zernioAccountProfileId(account: ZernioAccountDetails) {
+  const body = accountDetailsBody(account)
+  if (typeof body.profile === "string") return body.profile
+  return (
+    body.profileId ??
+    body.profile_id ??
+    body.ownerProfileId ??
+    body.profile?._id ??
+    body.profile?.id
   )
 }
 
@@ -175,7 +238,7 @@ export async function replyToInboxPost(
 }
 
 export function normalizeAccountHealth(health: ZernioAccountHealth) {
-  const source = health.health ?? health
+  const source = { ...(health.health ?? {}), ...health }
   const status = source.status ?? "unknown"
   const issues = Array.isArray(source.issues) ? source.issues.map(String) : []
   const needsReconnect =

@@ -3,8 +3,8 @@ import { NextResponse, type NextRequest } from "next/server"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import { getAuthedConvexClient } from "../../../convex-client"
+import { rateLimitZernioOAuth } from "../rateLimiter"
 import {
-  createZernioProfile,
   errorRedirectTarget,
   getZernioConnectUrl,
   isSyntacticallyValidConvexId,
@@ -16,6 +16,9 @@ import {
 export const runtime = "nodejs"
 
 export async function GET(request: NextRequest) {
+  const rateLimited = rateLimitZernioOAuth(request)
+  if (rateLimited) return rateLimited
+
   const returnTo = safeReturnTo(request.nextUrl.searchParams.get("returnTo"))
   const projectId = request.nextUrl.searchParams.get("projectId")
   if (!projectId) {
@@ -32,7 +35,7 @@ export async function GET(request: NextRequest) {
   if (!client) return response
 
   try {
-    const context = await client.query(api.reddit.getConnectContext, {
+    const context = await client.action(api.reddit.ensureZernioProfileForConnect, {
       projectId: projectId as Id<"projects">,
     })
     if (!context.canAddAccount) {
@@ -45,16 +48,12 @@ export async function GET(request: NextRequest) {
       )
     }
 
-    let zernioProfileId = context.zernioProfileId ?? undefined
-    if (!zernioProfileId) {
-      zernioProfileId = await createZernioProfile(context.projectName)
-      await client.mutation(api.reddit.saveZernioProfileId, {
-        projectId: projectId as Id<"projects">,
-        zernioProfileId,
-      })
-    }
+    const zernioProfileId = context.zernioProfileId
+    if (!zernioProfileId) throw new Error("Zernio profile response was incomplete")
 
+    const state = crypto.randomUUID()
     const callbackUrl = new URL("/api/zernio/reddit/callback", request.url)
+    callbackUrl.searchParams.set("state", state)
     const authUrl = await getZernioConnectUrl(
       zernioProfileId,
       callbackUrl.toString(),
@@ -71,6 +70,10 @@ export async function GET(request: NextRequest) {
       secure,
     })
     redirect.cookies.set(zernioCookieNames.profileId, zernioProfileId, {
+      ...zernioCookieOptions,
+      secure,
+    })
+    redirect.cookies.set(zernioCookieNames.state, state, {
       ...zernioCookieOptions,
       secure,
     })

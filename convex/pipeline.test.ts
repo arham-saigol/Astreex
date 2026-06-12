@@ -712,7 +712,7 @@ describe("account health monitor helpers", () => {
     expect(posted?.replyCount).toBe(4)
   })
 
-  test("checkAccountHealth patches missing and removed things distinctly", async () => {
+  test("checkAccountHealth skips replies without URLs and patches removed replies", async () => {
     const t = convexTest(schema, modules)
     const { projectId } = await seedProject(t)
     const redditAccountId = await seedRedditAccount(t, projectId)
@@ -764,6 +764,7 @@ describe("account health monitor helpers", () => {
           visibility: "visible",
           lastCheckedAt: now,
           createdAt: now + 1,
+          permalink: "https://www.reddit.com/r/startups/comments/removed",
         }),
       }
     })
@@ -786,7 +787,7 @@ describe("account health monitor helpers", () => {
       missing: await ctx.db.get(ids.missing),
       removed: await ctx.db.get(ids.removed),
     }))
-    expect(rows.missing?.visibility).toBe("shadow_hidden")
+    expect(rows.missing?.visibility).toBe("visible")
     expect(rows.removed?.visibility).toBe("removed")
   })
 

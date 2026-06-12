@@ -1,13 +1,23 @@
 import { v } from "convex/values"
+import { api, internal } from "./_generated/api"
 import {
+  action,
   internalMutation,
-  mutation,
   query,
   type MutationCtx,
   type QueryCtx,
 } from "./_generated/server"
 import type { Id } from "./_generated/dataModel"
 import { getPlanLimits } from "./lib/planLimits"
+import {
+  createZernioProfile,
+  getAccountDetails,
+  getAccountHealth,
+  normalizeAccountHealth,
+  zernioAccountId,
+  zernioAccountProfileId,
+  zernioAccountUsername,
+} from "./lib/zernio"
 
 const healthStatusValidator = v.union(
   v.literal("healthy"),
@@ -71,7 +81,15 @@ export const getConnectContext = query({
   args: {
     projectId: v.id("projects"),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<{
+    projectId: Id<"projects">
+    projectName: string
+    zernioProfileId: string | null
+    canAddAccount: boolean
+    accountLimit: number
+    usedAccounts: number
+    message?: string
+  }> => {
     const project = await getOwnedProject(ctx, args.projectId)
     const accountLimit = getPlanLimits(project.plan).maxRedditAccounts
     const accounts = await loadActiveProjectAccounts(
@@ -95,7 +113,94 @@ export const getConnectContext = query({
   },
 })
 
-export const saveZernioProfileId = mutation({
+export const ensureZernioProfileForConnect = action({
+  args: {
+    projectId: v.id("projects"),
+  },
+  handler: async (ctx, args): Promise<{
+    projectId: Id<"projects">
+    projectName: string
+    zernioProfileId: string | null
+    canAddAccount: boolean
+    accountLimit: number
+    usedAccounts: number
+    message?: string
+  }> => {
+    const context: {
+      projectId: Id<"projects">
+      projectName: string
+      zernioProfileId: string | null
+      canAddAccount: boolean
+      accountLimit: number
+      usedAccounts: number
+      message?: string
+    } = await ctx.runQuery(api.reddit.getConnectContext, {
+      projectId: args.projectId,
+    })
+    if (!context.canAddAccount) return context
+
+    let zernioProfileId = context.zernioProfileId ?? undefined
+    if (!zernioProfileId) {
+      zernioProfileId = await createZernioProfile(ctx, context.projectName)
+      await ctx.runMutation(internal.reddit.saveZernioProfileId, {
+        projectId: args.projectId,
+        zernioProfileId,
+      })
+    }
+
+    return { ...context, zernioProfileId }
+  },
+})
+
+export const completeZernioAccountConnect = action({
+  args: {
+    projectId: v.id("projects"),
+    zernioAccountId: v.string(),
+    zernioProfileId: v.string(),
+  },
+  handler: async (ctx, args): Promise<{ redditAccountId: Id<"redditAccounts"> }> => {
+    const context: {
+      zernioProfileId: string | null
+      canAddAccount: boolean
+      message?: string
+    } = await ctx.runQuery(api.reddit.getConnectContext, {
+      projectId: args.projectId,
+    })
+    if (!context.canAddAccount) {
+      throw new Error(context.message ?? "Reddit account limit reached for this plan")
+    }
+    if (context.zernioProfileId !== args.zernioProfileId) {
+      throw new Error("Invalid Zernio profile")
+    }
+
+    const account = await getAccountDetails(ctx, args.zernioAccountId)
+    const authoritativeAccountId = zernioAccountId(account)
+    const authoritativeProfileId = zernioAccountProfileId(account)
+    const redditUsername = zernioAccountUsername(account)
+    if (
+      (authoritativeAccountId && authoritativeAccountId !== args.zernioAccountId) ||
+      authoritativeProfileId !== args.zernioProfileId ||
+      !redditUsername
+    ) {
+      throw new Error("Unauthorized Zernio account")
+    }
+
+    const providerHealth = normalizeAccountHealth(
+      await getAccountHealth(ctx, args.zernioAccountId),
+    )
+    return await ctx.runMutation(internal.reddit.upsertZernioAccount, {
+      projectId: args.projectId,
+      redditUsername,
+      zernioAccountId: args.zernioAccountId,
+      providerHealthStatus: providerHealth.status,
+      providerCanPost: providerHealth.canPost,
+      providerNeedsReconnect: providerHealth.needsReconnect,
+      providerIssues: providerHealth.issues,
+    })
+  },
+})
+
+export const saveZernioProfileId = internalMutation({
   args: {
     projectId: v.id("projects"),
     zernioProfileId: v.string(),
@@ -115,7 +220,7 @@ export const saveZernioProfileId = mutation({
   },
 })
 
-export const upsertZernioAccount = mutation({
+export const upsertZernioAccount = internalMutation({
   args: {
     projectId: v.id("projects"),
     redditUsername: v.string(),

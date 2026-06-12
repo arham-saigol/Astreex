@@ -3,13 +3,16 @@ import { NextResponse, type NextRequest } from "next/server"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import { getAuthedConvexClient } from "../../../convex-client"
+import { rateLimitZernioOAuth } from "../rateLimiter"
 import {
   clearZernioCookies,
   errorRedirectTarget,
-  getZernioAccountHealth,
-  normalizeAccountHealth,
+  getZernioAccountDetails,
   redirectTarget,
   safeReturnTo,
+  zernioAccountId,
+  zernioAccountProfileId,
+  zernioAccountUsername,
   zernioCookieNames,
 } from "../shared"
 
@@ -28,30 +31,35 @@ function badRequest(
 }
 
 export async function GET(request: NextRequest) {
+  const rateLimited = rateLimitZernioOAuth(request)
+  if (rateLimited) return rateLimited
+
   const cookieProjectId = request.cookies.get(zernioCookieNames.projectId)?.value
   const cookieProfileId = request.cookies.get(zernioCookieNames.profileId)?.value
+  const cookieState = request.cookies.get(zernioCookieNames.state)?.value
   const returnTo = safeReturnTo(
     request.cookies.get(zernioCookieNames.returnTo)?.value ?? null,
   )
   const connected = request.nextUrl.searchParams.get("connected")
   const profileId = request.nextUrl.searchParams.get("profileId")
   const accountId = request.nextUrl.searchParams.get("accountId")
-  const username = request.nextUrl.searchParams.get("username")
+  const state = request.nextUrl.searchParams.get("state")
   const error = request.nextUrl.searchParams.get("error")
 
   if (error) {
     return badRequest(request, returnTo, error)
   }
 
-  if (!cookieProjectId || !cookieProfileId) {
+  if (!cookieProjectId || !cookieProfileId || !cookieState) {
     return badRequest(request, returnTo, "Missing Zernio connection context")
   }
 
   if (
     connected !== "reddit" ||
     profileId !== cookieProfileId ||
+    state !== cookieState ||
     !accountId ||
-    !username
+    !isSyntacticallyValidZernioId(accountId)
   ) {
     return badRequest(request, returnTo, "Invalid Zernio callback")
   }
@@ -70,17 +78,22 @@ export async function GET(request: NextRequest) {
       throw new Error(context.message ?? "Reddit account limit reached for this plan")
     }
 
-    const providerHealth = normalizeAccountHealth(
-      await getZernioAccountHealth(accountId),
-    )
-    await client.mutation(api.reddit.upsertZernioAccount, {
+    const account = await getZernioAccountDetails(accountId)
+    const authoritativeAccountId = zernioAccountId(account)
+    const authoritativeProfileId = zernioAccountProfileId(account)
+    const redditUsername = zernioAccountUsername(account)
+    if (
+      (authoritativeAccountId && authoritativeAccountId !== accountId) ||
+      authoritativeProfileId !== cookieProfileId ||
+      !redditUsername
+    ) {
+      return badRequest(request, returnTo, "Unauthorized Zernio account")
+    }
+
+    await client.action(api.reddit.completeZernioAccountConnect, {
       projectId: cookieProjectId as Id<"projects">,
-      redditUsername: username,
       zernioAccountId: accountId,
-      providerHealthStatus: providerHealth.status,
-      providerCanPost: providerHealth.canPost,
-      providerNeedsReconnect: providerHealth.needsReconnect,
-      providerIssues: providerHealth.issues,
+      zernioProfileId: cookieProfileId,
     })
 
     const response = NextResponse.redirect(redirectTarget(request, returnTo))
@@ -94,4 +107,8 @@ export async function GET(request: NextRequest) {
     clearZernioCookies(response)
     return response
   }
+}
+
+function isSyntacticallyValidZernioId(value: string) {
+  return /^[A-Za-z0-9_-]{3,128}$/.test(value)
 }

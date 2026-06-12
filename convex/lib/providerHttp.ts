@@ -8,18 +8,28 @@ export class ProviderHttpError extends Error {
   body: unknown
   provider: Provider
   endpoint: string
+  retryable: boolean
 
-  constructor(provider: Provider, endpoint: string, status: number, body: unknown) {
+  constructor(
+    provider: Provider,
+    endpoint: string,
+    status: number,
+    body: unknown,
+    options: { message?: string; retryable?: boolean } = {},
+  ) {
     const message =
-      typeof body === "object" && body !== null && "error" in body
+      options.message ??
+      (typeof body === "object" && body !== null && "error" in body
         ? String((body as { error?: unknown }).error)
-        : `${provider} request failed with status ${status}`
+        : `${provider} request failed with status ${status}`)
     super(message)
     this.name = "ProviderHttpError"
     this.status = status
     this.body = body
     this.provider = provider
     this.endpoint = endpoint
+    this.retryable =
+      options.retryable ?? [429, 500, 502, 503, 504].includes(status)
   }
 }
 
@@ -48,14 +58,14 @@ export async function providerFetchJson<T>(
   try {
     const response = await fetch(input, { ...init, signal: controller.signal })
     const body = await readResponseBody(response)
-    await ctx.runMutation(internal.providerRequestLog.log, {
+    void ctx.runMutation(internal.providerRequestLog.log, {
       provider,
       endpoint,
       status: response.status,
       ok: response.ok,
       durationMs: Date.now() - requestedAt,
       requestedAt,
-    })
+    }).catch(() => null)
 
     if (!response.ok) {
       throw new ProviderHttpError(provider, endpoint, response.status, body)
@@ -71,15 +81,21 @@ export async function providerFetchJson<T>(
         : error instanceof Error
           ? error.message
           : `${provider} ${endpoint} failed`
-    await ctx.runMutation(internal.providerRequestLog.log, {
+    void ctx.runMutation(internal.providerRequestLog.log, {
       provider,
       endpoint,
       ok: false,
       durationMs: Date.now() - requestedAt,
       error: message.slice(0, 500),
       requestedAt,
-    })
-    throw new Error(message)
+    }).catch(() => null)
+    throw new ProviderHttpError(
+      provider,
+      endpoint,
+      0,
+      { error: message },
+      { message, retryable: true },
+    )
   } finally {
     clearTimeout(timer)
   }

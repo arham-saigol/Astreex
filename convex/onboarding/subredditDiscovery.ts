@@ -13,6 +13,7 @@ import {
   type FetchLayerCommunity,
 } from "../lib/fetchLayer"
 import { getSubredditDiscoveryLimits } from "../lib/planLimits"
+import { stringifyRulesJson } from "../lib/rules"
 
 type CandidateSubreddit = {
   name: string
@@ -197,12 +198,32 @@ function sanitizeRanked(
   return selected
 }
 
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  mapper: (item: T) => Promise<R>,
+) {
+  const results: R[] = []
+  let nextIndex = 0
+
+  async function worker() {
+    while (nextIndex < items.length) {
+      const index = nextIndex++
+      results[index] = await mapper(items[index])
+    }
+  }
+
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, items.length) }, () => worker()),
+  )
+  return results
+}
+
 async function enrichSelectedSubreddits(
   ctx: Parameters<typeof communityDetails>[0],
   subreddits: ReturnType<typeof sanitizeRanked>,
 ) {
-  const enriched = []
-  for (const subreddit of subreddits) {
+  return await mapWithConcurrency(subreddits, 5, async (subreddit) => {
     try {
       const payload = await communityDetails(ctx, subreddit.name)
       const details = communityFromDetails(payload)
@@ -220,20 +241,16 @@ async function enrichSelectedSubreddits(
         details.description ??
         undefined
 
-      enriched.push({
+      return {
         ...subreddit,
         memberCount,
         description: description?.slice(0, 1000),
-        rulesJson: details.rules === undefined
-          ? undefined
-          : JSON.stringify(details.rules).slice(0, 20_000),
-      })
+        rulesJson: details.rules === undefined ? undefined : stringifyRulesJson(details.rules),
+      }
     } catch {
-      enriched.push(subreddit)
+      return subreddit
     }
-  }
-
-  return enriched
+  })
 }
 
 export const discoverSubreddits = internalAction({

@@ -6,6 +6,7 @@ export const zernioCookieNames = {
   projectId: "zernio_reddit_project_id",
   returnTo: "zernio_reddit_return_to",
   profileId: "zernio_reddit_profile_id",
+  state: "zernio_reddit_state",
 } as const
 
 export const zernioCookieOptions = {
@@ -67,23 +68,36 @@ async function fetchZernioJson<T>(
   endpoint: string,
   init: RequestInit = {},
 ) {
-  const response = await fetch(`${zernioBaseUrl()}${endpoint}`, {
-    ...init,
-    headers: {
-      Authorization: `Bearer ${zernioApiKey()}`,
-      "Content-Type": "application/json",
-      ...(init.headers ?? {}),
-    },
-  })
-  const body = await response.json().catch(() => null) as T
-  if (!response.ok) {
-    const message =
-      body && typeof body === "object" && "error" in body
-        ? String((body as { error?: unknown }).error)
-        : `Zernio request failed with status ${response.status}`
-    throw new Error(message)
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 10_000)
+
+  try {
+    const response = await fetch(`${zernioBaseUrl()}${endpoint}`, {
+      ...init,
+      signal: controller.signal,
+      headers: {
+        Authorization: `Bearer ${zernioApiKey()}`,
+        "Content-Type": "application/json",
+        ...(init.headers ?? {}),
+      },
+    })
+    const body = await response.json().catch(() => null) as T
+    if (!response.ok) {
+      const message =
+        body && typeof body === "object" && "error" in body
+          ? String((body as { error?: unknown }).error)
+          : `Zernio request failed with status ${response.status}`
+      throw new Error(message)
+    }
+    return body
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new Error(`Zernio request to ${endpoint} timed out`)
+    }
+    throw error
+  } finally {
+    clearTimeout(timeout)
   }
-  return body
 }
 
 export async function createZernioProfile(name: string) {
@@ -127,8 +141,53 @@ export async function getZernioAccountHealth(accountId: string) {
   }>(`/accounts/${encodeURIComponent(accountId)}/health`)
 }
 
+type ZernioAccountDetails = {
+  account?: ZernioAccountDetails
+  _id?: string
+  id?: string
+  accountId?: string
+  username?: string
+  redditUsername?: string
+  profileId?: string
+  profile_id?: string
+  ownerProfileId?: string
+  profile?: string | { _id?: string; id?: string }
+}
+
+function accountDetailsBody(account: ZernioAccountDetails): ZernioAccountDetails {
+  return account.account ?? account
+}
+
+export async function getZernioAccountDetails(accountId: string) {
+  return await fetchZernioJson<ZernioAccountDetails>(
+    `/accounts/${encodeURIComponent(accountId)}`,
+  )
+}
+
+export function zernioAccountId(account: ZernioAccountDetails) {
+  const body = accountDetailsBody(account)
+  return body._id ?? body.id ?? body.accountId
+}
+
+export function zernioAccountUsername(account: ZernioAccountDetails) {
+  const body = accountDetailsBody(account)
+  return body.redditUsername ?? body.username
+}
+
+export function zernioAccountProfileId(account: ZernioAccountDetails) {
+  const body = accountDetailsBody(account)
+  if (typeof body.profile === "string") return body.profile
+  return (
+    body.profileId ??
+    body.profile_id ??
+    body.ownerProfileId ??
+    body.profile?._id ??
+    body.profile?.id
+  )
+}
+
 export function normalizeAccountHealth(health: Awaited<ReturnType<typeof getZernioAccountHealth>>) {
-  const source = health.health ?? health
+  const source = { ...(health.health ?? {}), ...health }
   const status = source.status ?? "unknown"
   const issues = Array.isArray(source.issues) ? source.issues.map(String) : []
   const needsReconnect =
