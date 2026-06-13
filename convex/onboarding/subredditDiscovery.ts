@@ -6,13 +6,20 @@ import { z } from "zod"
 import { internal } from "../_generated/api"
 import { internalAction } from "../_generated/server"
 import { deepseekV4Pro, judgeSettings } from "../lib/ai"
+import {
+  communityDetails,
+  communityFromDetails,
+  searchCommunities,
+  type FetchLayerCommunity,
+} from "../lib/fetchLayer"
 import { getSubredditDiscoveryLimits } from "../lib/planLimits"
-import { withRateLimit } from "../lib/rateLimiter"
+import { stringifyRulesJson } from "../lib/rules"
 
 type CandidateSubreddit = {
   name: string
   subscribers?: number
   description: string
+  rulesJson?: string
 }
 
 type DiscoveryResult = {
@@ -70,104 +77,54 @@ function discoveryKeywords(profile: Record<string, unknown>) {
   return keywords
 }
 
-async function getAppAccessToken() {
-  const clientId = process.env.REDDIT_CLIENT_ID
-  const clientSecret = process.env.REDDIT_CLIENT_SECRET
-  if (!clientId || !clientSecret) {
-    throw new Error("Reddit OAuth is not configured")
+function candidateFromCommunity(
+  community: FetchLayerCommunity,
+): CandidateSubreddit | null {
+  const displayName =
+    community.displayName ??
+    community.display_name ??
+    community.name ??
+    community.subreddit ??
+    ""
+  const name = normalizeSubredditName(displayName)
+  if (!name) return null
+
+  const type = community.subredditType ?? community.type ?? "public"
+  if (
+    community.over18 ||
+    community.nsfw ||
+    community.quarantined ||
+    community.quarantine ||
+    type === "private"
+  ) {
+    return null
   }
 
-  const response = await fetch("https://www.reddit.com/api/v1/access_token", {
-    method: "POST",
-    headers: {
-      Authorization: `Basic ${btoa(`${clientId}:${clientSecret}`)}`,
-      "Content-Type": "application/x-www-form-urlencoded",
-      "User-Agent": "astreex/0.1",
-    },
-    body: new URLSearchParams({ grant_type: "client_credentials" }),
-  })
+  const subscribers =
+    typeof community.subscribers === "number"
+      ? community.subscribers
+      : typeof community.memberCount === "number"
+        ? community.memberCount
+        : typeof community.members === "number"
+          ? community.members
+          : undefined
+  const description =
+    community.publicDescription ??
+    community.public_description ??
+    community.description ??
+    ""
 
-  if (!response.ok) {
-    throw new Error("Failed to create Reddit app access token")
-  }
-
-  const body = (await response.json()) as { access_token?: string }
-  if (!body.access_token) throw new Error("Reddit app token response was incomplete")
-  return body.access_token
-}
-
-function parseSearchResults(payload: unknown) {
-  const children =
-    typeof payload === "object" && payload !== null &&
-    "data" in payload &&
-    typeof payload.data === "object" && payload.data !== null &&
-    "children" in payload.data &&
-    Array.isArray(payload.data.children)
-      ? payload.data.children
-      : []
-
-  const candidates: CandidateSubreddit[] = []
-  for (const child of children) {
-    const data =
-      typeof child === "object" && child !== null && "data" in child
-        ? child.data
-        : null
-    if (typeof data !== "object" || data === null) continue
-
-    const displayName =
-      "display_name" in data && typeof data.display_name === "string"
-        ? data.display_name
-        : ""
-    const name = normalizeSubredditName(displayName)
-    if (!name) continue
-
-    const over18 = "over18" in data && data.over18 === true
-    const quarantined = "quarantine" in data && data.quarantine === true
-    const type =
-      "subreddit_type" in data && typeof data.subreddit_type === "string"
-        ? data.subreddit_type
-        : "public"
-    if (over18 || quarantined || type === "private") continue
-
-    const subscribers =
-      "subscribers" in data && typeof data.subscribers === "number"
-        ? data.subscribers
-        : undefined
-    const description =
-      "public_description" in data && typeof data.public_description === "string"
-        ? data.public_description
-        : ""
-
-    candidates.push({ name, subscribers, description })
-  }
-
-  return candidates
+  return { name, subscribers, description }
 }
 
 async function searchSubreddits(
-  ctx: Parameters<typeof withRateLimit>[0],
-  accessToken: string,
+  ctx: Parameters<typeof searchCommunities>[0],
   term: string,
 ) {
-  return await withRateLimit(ctx, 3, async () => {
-    const url = new URL("https://oauth.reddit.com/subreddits/search.json")
-    url.searchParams.set("q", term)
-    url.searchParams.set("limit", "10")
-    url.searchParams.set("include_over_18", "false")
-
-    const response = await fetch(url, {
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        "User-Agent": "astreex/0.1",
-      },
-    })
-
-    if (!response.ok) {
-      throw new Error(`Failed to search Reddit for "${term}"`)
-    }
-
-    return parseSearchResults(await response.json())
-  })
+  const communities = await searchCommunities(ctx, term, 10)
+  return communities
+    .map(candidateFromCommunity)
+    .filter((candidate): candidate is CandidateSubreddit => candidate !== null)
 }
 
 function mergeCandidates(
@@ -241,6 +198,61 @@ function sanitizeRanked(
   return selected
 }
 
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  mapper: (item: T) => Promise<R>,
+) {
+  const results: R[] = []
+  let nextIndex = 0
+
+  async function worker() {
+    while (nextIndex < items.length) {
+      const index = nextIndex++
+      results[index] = await mapper(items[index])
+    }
+  }
+
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, items.length) }, () => worker()),
+  )
+  return results
+}
+
+async function enrichSelectedSubreddits(
+  ctx: Parameters<typeof communityDetails>[0],
+  subreddits: ReturnType<typeof sanitizeRanked>,
+) {
+  return await mapWithConcurrency(subreddits, 5, async (subreddit) => {
+    try {
+      const payload = await communityDetails(ctx, subreddit.name)
+      const details = communityFromDetails(payload)
+      const memberCount =
+        typeof details.subscribers === "number"
+          ? details.subscribers
+          : typeof details.memberCount === "number"
+            ? details.memberCount
+            : typeof details.members === "number"
+              ? details.members
+              : subreddit.memberCount
+      const description =
+        details.publicDescription ??
+        details.public_description ??
+        details.description ??
+        undefined
+
+      return {
+        ...subreddit,
+        memberCount,
+        description: description?.slice(0, 1000),
+        rulesJson: details.rules === undefined ? undefined : stringifyRulesJson(details.rules),
+      }
+    } catch {
+      return subreddit
+    }
+  })
+}
+
 export const discoverSubreddits = internalAction({
   args: {
     projectId: v.id("projects"),
@@ -273,17 +285,16 @@ export const discoverSubreddits = internalAction({
       "ProductManagement",
       "B2BMarketing",
     ]
-    const accessToken = await getAppAccessToken()
     const candidates = new Map<string, CandidateSubreddit>()
 
     for (const term of keywords) {
-      mergeCandidates(candidates, await searchSubreddits(ctx, accessToken, term))
+      mergeCandidates(candidates, await searchSubreddits(ctx, term))
       if (candidates.size >= 100) break
     }
 
     if (candidates.size === 0) {
       for (const term of fallbackKeywords) {
-        mergeCandidates(candidates, await searchSubreddits(ctx, accessToken, term))
+        mergeCandidates(candidates, await searchSubreddits(ctx, term))
         if (candidates.size >= 50) break
       }
     }
@@ -327,11 +338,13 @@ export const discoverSubreddits = internalAction({
       limits.activeCount,
     )
 
+    const enrichedSubreddits = await enrichSelectedSubreddits(ctx, subreddits)
+
     const seeded: { created: number } = await ctx.runMutation(
       internal.onboarding.data.seedDiscoveredSubreddits,
       {
         projectId: args.projectId,
-        subreddits,
+        subreddits: enrichedSubreddits,
       },
     )
 

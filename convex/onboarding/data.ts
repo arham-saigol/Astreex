@@ -14,6 +14,8 @@ const subredditDiscoveryStatusValidator = v.union(
 const discoveredSubredditValidator = v.object({
   name: v.string(),
   memberCount: v.optional(v.number()),
+  description: v.optional(v.string()),
+  rulesJson: v.optional(v.string()),
   relevanceScore: v.number(),
   reasoning: v.string(),
   active: v.boolean(),
@@ -150,6 +152,8 @@ export const seedDiscoveredSubreddits = internalMutation({
         projectId: args.projectId,
         name,
         memberCount: subreddit.memberCount,
+        description: subreddit.description,
+        rulesJson: subreddit.rulesJson,
         relevanceScore: Math.max(0, Math.min(100, subreddit.relevanceScore)),
         reasoning: subreddit.reasoning,
         active: subreddit.active,

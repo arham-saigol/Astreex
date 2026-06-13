@@ -7,16 +7,26 @@ import {
   internalQuery,
   type ActionCtx,
 } from "../_generated/server"
-import { withRateLimit } from "../lib/rateLimiter"
+import { ProviderHttpError } from "../lib/providerHttp"
+import {
+  createRedditPost,
+  getPost,
+  replyToInboxPost,
+  type ZernioCommentResponse,
+  type ZernioPostResponse,
+} from "../lib/zernio"
 
-const userAgent = "astreex/0.1"
 const tenMinutesMs = 10 * 60 * 1000
+const statusPollMs = 30 * 1000
 
 type AccountContext = {
   _id: Id<"redditAccounts">
   projectId: Id<"projects">
   isActive: boolean
   healthStatus: "healthy" | "warning" | "banned"
+  zernioAccountId: string
+  providerCanPost?: boolean
+  providerNeedsReconnect?: boolean
 }
 
 type PostContext = {
@@ -26,25 +36,18 @@ type PostContext = {
   surfacedPost: Doc<"surfacedPosts"> | null
 }
 
-type RedditWriteResult = {
-  ok: boolean
-  status: number
-  json: unknown
+type SubmitResult = {
+  redditId?: string
+  redditThingId?: string
+  zernioPostId?: string
+  status?: string
+  platformStatus?: string
+  permalink?: string
+  error?: string
 }
 
 function shortFailureReason(value: string) {
   return value.replace(/\s+/g, " ").trim().slice(0, 240)
-}
-
-async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit, timeoutMs: number) {
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), timeoutMs)
-
-  try {
-    return await fetch(input, { ...init, signal: controller.signal })
-  } finally {
-    clearTimeout(timer)
-  }
 }
 
 function contentForCard(card: Doc<"cards">) {
@@ -58,106 +61,110 @@ function parseOriginalContent(content: string) {
   return { title, body }
 }
 
-function redditJsonErrors(json: unknown) {
-  if (!json || typeof json !== "object") return []
-  const root = json as {
-    json?: { errors?: unknown }
-    errors?: unknown
-  }
-  const errors = root.json?.errors ?? root.errors
-  return Array.isArray(errors) ? errors : []
+function absoluteRedditUrl(value: string | undefined) {
+  if (!value) return undefined
+  if (value.startsWith("http://") || value.startsWith("https://")) return value
+  if (value.startsWith("/")) return `https://www.reddit.com${value}`
+  return value
 }
 
-function hasRateLimitError(json: unknown) {
-  return redditJsonErrors(json).some((error) => {
-    if (!Array.isArray(error)) return false
-    return String(error[0] ?? "").toUpperCase() === "RATELIMIT"
-  })
+function postBody(response: ZernioPostResponse) {
+  return response.post ?? response
 }
 
-function hasRedditErrors(json: unknown) {
-  return redditJsonErrors(json).length > 0
+function redditPlatform(response: ZernioPostResponse) {
+  return postBody(response).platforms?.find((item) => item.platform === "reddit")
 }
 
-function extractCreatedThing(json: unknown) {
-  const root = json as {
-    json?: {
-      data?: {
-        things?: Array<{ data?: { name?: string; id?: string; permalink?: string } }>
-        name?: string
-        id?: string
-        permalink?: string
-      }
-    }
-  }
-  const data = root?.json?.data
-  const firstThing = data?.things?.[0]?.data
-  const name = firstThing?.name ?? data?.name
-  const id = firstThing?.id ?? data?.id ?? (name?.includes("_") ? name.split("_")[1] : undefined)
-  const permalink = firstThing?.permalink ?? data?.permalink
+function extractCreatedPost(response: ZernioPostResponse) {
+  const body = postBody(response)
+  const platform = redditPlatform(response)
+  const redditId = platform?.platformPostId
+  const redditThingId = redditId
+    ? redditId.includes("_")
+      ? redditId
+      : `t3_${redditId}`
+    : undefined
 
   return {
-    redditThingId: name,
-    redditId: id,
-    permalink,
+    zernioPostId: body._id ?? body.id,
+    status: body.status,
+    platformStatus: platform?.status,
+    redditId: redditId?.includes("_") ? redditId.split("_")[1] : redditId,
+    redditThingId,
+    permalink: absoluteRedditUrl(platform?.platformPostUrl ?? platform?.url),
+    error: platform?.error,
   }
 }
 
-async function submitToReddit(
+function extractCreatedComment(response: ZernioCommentResponse) {
+  const body = response.comment ?? response
+  const redditId = body.redditId ?? body.id ?? body._id
+  const redditThingId =
+    body.thingId ??
+    (redditId
+      ? redditId.includes("_")
+        ? redditId
+        : `t1_${redditId}`
+      : undefined)
+
+  return {
+    redditId: redditId?.includes("_") ? redditId.split("_")[1] : redditId,
+    redditThingId,
+    permalink: absoluteRedditUrl(body.permalink),
+  }
+}
+
+function isPublished(status: string | undefined) {
+  return status === "published" || status === "success" || status === "posted"
+}
+
+function isTerminalFailure(status: string | undefined) {
+  return status === "failed" || status === "error" || status === "rejected"
+}
+
+async function submitToZernio(
   ctx: ActionCtx,
-  token: string,
+  account: AccountContext,
   card: Doc<"cards">,
   surfacedPost: Doc<"surfacedPosts"> | null,
-) {
+  idempotencyKey: string,
+): Promise<SubmitResult> {
   const content = contentForCard(card)
 
-  return await withRateLimit(ctx, 2, async (): Promise<RedditWriteResult> => {
-    if (card.type === "reply") {
-      if (!surfacedPost) {
-        throw new Error("Reply card is missing surfaced post")
-      }
-
-      const body = new URLSearchParams({
-        api_type: "json",
-        thing_id: `t3_${surfacedPost.redditPostId}`,
-        text: content,
-      })
-      const response = await fetchWithTimeout("https://oauth.reddit.com/api/comment", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/x-www-form-urlencoded",
-          "User-Agent": userAgent,
-        },
-        body,
-      }, 10_000)
-
-      return { ok: response.ok, status: response.status, json: await response.json() }
+  if (card.type === "reply") {
+    if (!surfacedPost) {
+      throw new Error("Reply card is missing surfaced post")
     }
 
-    const { title, body: text } = parseOriginalContent(content)
-    if (!title) throw new Error("Original post title is missing")
-    if (!card.targetSubreddit) throw new Error("Original post subreddit is missing")
+    const parentThingId = surfacedPost.redditThingId ?? `t3_${surfacedPost.redditPostId}`
+    const result = extractCreatedComment(await replyToInboxPost(ctx, {
+      accountId: account.zernioAccountId,
+      postId: parentThingId,
+      message: content,
+      idempotencyKey,
+    }))
+    if (!result.redditId) {
+      throw new Error("Zernio response did not include created comment")
+    }
+    return result
+  }
 
-    const body = new URLSearchParams({
-      api_type: "json",
-      sr: card.targetSubreddit,
-      kind: "self",
-      title,
-      text,
-    })
-    const response = await fetchWithTimeout("https://oauth.reddit.com/api/submit", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/x-www-form-urlencoded",
-        "User-Agent": userAgent,
-      },
-      body,
-    }, 10_000)
+  const { title, body } = parseOriginalContent(content)
+  if (!title) throw new Error("Original post title is missing")
+  if (!card.targetSubreddit) throw new Error("Original post subreddit is missing")
 
-    return { ok: response.ok, status: response.status, json: await response.json() }
-  })
+  const result = extractCreatedPost(await createRedditPost(ctx, {
+    accountId: account.zernioAccountId,
+    subreddit: card.targetSubreddit,
+    title,
+    content: body,
+    idempotencyKey,
+  }))
+  if (isTerminalFailure(result.status) || isTerminalFailure(result.platformStatus)) {
+    throw new Error(result.error ?? "Zernio post failed")
+  }
+  return result
 }
 
 async function scheduleRetry(
@@ -195,7 +202,13 @@ export const postToReddit = internalAction({
     }
 
     let account = context.assignedAccount
-    if (!account || !account.isActive || account.healthStatus !== "healthy") {
+    if (
+      !account ||
+      !account.isActive ||
+      account.healthStatus !== "healthy" ||
+      account.providerCanPost === false ||
+      account.providerNeedsReconnect === true
+    ) {
       const replacement: AccountContext | null = await ctx.runQuery(
         internal.pipeline.poster.chooseHealthyReplacementAccount,
         {
@@ -225,75 +238,72 @@ export const postToReddit = internalAction({
         cardId: args.cardId,
         retryAttempt,
       })
-
-      const token: string = await ctx.runAction(internal.reddit.getValidToken, {
-        redditAccountId: account._id,
-      })
-      const result = await submitToReddit(
-        ctx,
-        token,
-        context.card,
-        context.surfacedPost,
+      const submission: { idempotencyKey: string } = await ctx.runMutation(
+        internal.pipeline.poster.ensureZernioSubmission,
+        {
+          cardId: args.cardId,
+          redditAccountId: account._id,
+        },
       )
 
-      if (result.status === 401 || result.status === 403) {
-        await ctx.runMutation(internal.reddit.setAccountHealthStatus, {
-          redditAccountId: account._id,
-          healthStatus: "warning",
-        })
-        await ctx.runMutation(internal.pipeline.poster.markPostFailed, {
-          cardId: args.cardId,
-          retryAttempt,
-          failureReason: "Reddit authorization failed",
-        })
+      const result = await submitToZernio(
+        ctx,
+        account,
+        context.card,
+        context.surfacedPost,
+        submission.idempotencyKey,
+      )
+
+      if (
+        context.card.type === "original" &&
+        result.zernioPostId &&
+        (!result.redditId ||
+          (!isPublished(result.status) && !isPublished(result.platformStatus)))
+      ) {
+        await ctx.scheduler.runAfter(
+          statusPollMs,
+          internal.pipeline.poster.pollZernioPostStatus,
+          {
+            cardId: args.cardId,
+            redditAccountId: account._id,
+            zernioPostId: result.zernioPostId,
+            retryAttempt,
+          },
+        )
         return null
       }
 
-      if (result.status === 429 || hasRateLimitError(result.json)) {
-        if (retryAttempt < 3) {
-          await scheduleRetry(ctx, args.cardId, retryAttempt, "Reddit rate limit")
-          return null
-        }
-
-        await ctx.runMutation(internal.pipeline.poster.markPostFailed, {
-          cardId: args.cardId,
-          retryAttempt,
-          failureReason: "Reddit rate limit",
-        })
-        return null
-      }
-
-      if (!result.ok || hasRedditErrors(result.json)) {
-        await ctx.runMutation(internal.pipeline.poster.markPostFailed, {
-          cardId: args.cardId,
-          retryAttempt,
-          failureReason: "Reddit post failed",
-        })
-        return null
-      }
-
-      const created = extractCreatedThing(result.json)
-      if (!created.redditId) {
-        await ctx.runMutation(internal.pipeline.poster.markPostFailed, {
-          cardId: args.cardId,
-          retryAttempt,
-          failureReason: "Reddit response did not include created content",
-        })
-        return null
+      if (!result.redditId) {
+        throw new Error("Zernio response did not include Reddit id")
       }
 
       await ctx.runMutation(internal.pipeline.poster.markPostSucceeded, {
         cardId: args.cardId,
         redditAccountId: account._id,
-        redditId: created.redditId,
-        redditThingId: created.redditThingId,
-        permalink: created.permalink,
+        redditId: result.redditId,
+        redditThingId: result.redditThingId,
+        zernioPostId: result.zernioPostId,
+        permalink: result.permalink,
       })
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Reddit post failed"
-      const isCapacityError = message.includes("rate limit capacity")
+      const message = error instanceof Error ? error.message : "Zernio post failed"
+      const status = error instanceof ProviderHttpError ? error.status : undefined
+      const isRetryable =
+        (error instanceof ProviderHttpError && error.retryable) ||
+        status === 429 ||
+        status === 500 ||
+        status === 502 ||
+        status === 503 ||
+        status === 504
 
-      if (isCapacityError && retryAttempt < 3) {
+      if (status === 401 || status === 403) {
+        await ctx.runMutation(internal.reddit.setAccountHealthStatus, {
+          redditAccountId: account._id,
+          healthStatus: "warning",
+        })
+      }
+
+      if (isRetryable && retryAttempt < 3) {
         await scheduleRetry(ctx, args.cardId, retryAttempt, message)
         return null
       }
@@ -301,9 +311,99 @@ export const postToReddit = internalAction({
       await ctx.runMutation(internal.pipeline.poster.markPostFailed, {
         cardId: args.cardId,
         retryAttempt,
-        failureReason: isCapacityError
-          ? "Reddit rate limit capacity was not available"
-          : shortFailureReason(message),
+        failureReason: shortFailureReason(message),
+      })
+    }
+
+    return null
+  },
+})
+
+export const pollZernioPostStatus = internalAction({
+  args: {
+    cardId: v.id("cards"),
+    redditAccountId: v.id("redditAccounts"),
+    zernioPostId: v.string(),
+    retryAttempt: v.number(),
+    pollAttempt: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const pollAttempt = args.pollAttempt ?? 0
+    const context: PostContext | null = await ctx.runQuery(
+      internal.pipeline.poster.loadPostContext,
+      { cardId: args.cardId },
+    )
+    if (
+      !context ||
+      (context.card.status !== "scheduled" && context.card.status !== "approved")
+    ) {
+      return null
+    }
+
+    try {
+      const result = extractCreatedPost(await getPost(ctx, args.zernioPostId))
+      if (isTerminalFailure(result.status) || isTerminalFailure(result.platformStatus)) {
+        await ctx.runMutation(internal.pipeline.poster.markPostFailed, {
+          cardId: args.cardId,
+          retryAttempt: args.retryAttempt,
+          failureReason: result.error ?? "Zernio post failed",
+        })
+        return null
+      }
+
+      if (
+        result.redditId &&
+        (isPublished(result.status) || isPublished(result.platformStatus))
+      ) {
+        await ctx.runMutation(internal.pipeline.poster.markPostSucceeded, {
+          cardId: args.cardId,
+          redditAccountId: args.redditAccountId,
+          redditId: result.redditId,
+          redditThingId: result.redditThingId,
+          zernioPostId: args.zernioPostId,
+          permalink: result.permalink,
+        })
+        return null
+      }
+
+      if (pollAttempt < 4) {
+        await ctx.scheduler.runAfter(
+          statusPollMs,
+          internal.pipeline.poster.pollZernioPostStatus,
+          { ...args, pollAttempt: pollAttempt + 1 },
+        )
+        return null
+      }
+
+      await ctx.runMutation(internal.pipeline.poster.markPostFailed, {
+        cardId: args.cardId,
+        retryAttempt: args.retryAttempt,
+        failureReason: "Zernio post did not publish in time",
+      })
+    } catch (error) {
+      const status = error instanceof ProviderHttpError ? error.status : undefined
+      if (
+        pollAttempt < 4 &&
+        ((error instanceof ProviderHttpError && error.retryable) ||
+          status === 429 ||
+          status === 500 ||
+          status === 502 ||
+          status === 503 ||
+          status === 504)
+      ) {
+        await ctx.scheduler.runAfter(
+          statusPollMs,
+          internal.pipeline.poster.pollZernioPostStatus,
+          { ...args, pollAttempt: pollAttempt + 1 },
+        )
+        return null
+      }
+      await ctx.runMutation(internal.pipeline.poster.markPostFailed, {
+        cardId: args.cardId,
+        retryAttempt: args.retryAttempt,
+        failureReason: shortFailureReason(
+          error instanceof Error ? error.message : "Zernio status check failed",
+        ),
       })
     }
 
@@ -336,6 +436,9 @@ export const loadPostContext = internalQuery({
             projectId: assignedAccount.projectId,
             isActive: assignedAccount.isActive,
             healthStatus: assignedAccount.healthStatus,
+            zernioAccountId: assignedAccount.zernioAccountId,
+            providerCanPost: assignedAccount.providerCanPost,
+            providerNeedsReconnect: assignedAccount.providerNeedsReconnect,
           }
         : null,
       surfacedPost,
@@ -358,7 +461,9 @@ export const chooseHealthyReplacementAccount = internalQuery({
       (account) =>
         account._id !== args.currentRedditAccountId &&
         account.isActive &&
-        account.healthStatus === "healthy",
+        account.healthStatus === "healthy" &&
+        account.providerCanPost !== false &&
+        account.providerNeedsReconnect !== true,
     )
 
     if (!replacement) return null
@@ -368,6 +473,9 @@ export const chooseHealthyReplacementAccount = internalQuery({
       projectId: replacement.projectId,
       isActive: replacement.isActive,
       healthStatus: replacement.healthStatus,
+      zernioAccountId: replacement.zernioAccountId,
+      providerCanPost: replacement.providerCanPost,
+      providerNeedsReconnect: replacement.providerNeedsReconnect,
     }
   },
 })
@@ -387,12 +495,37 @@ export const markPostAttempt = internalMutation({
   },
 })
 
+export const ensureZernioSubmission = internalMutation({
+  args: {
+    cardId: v.id("cards"),
+    redditAccountId: v.id("redditAccounts"),
+  },
+  handler: async (ctx, args): Promise<{ idempotencyKey: string }> => {
+    const card = await ctx.db.get(args.cardId)
+    if (!card) throw new Error("Card not found")
+    if (
+      card.zernioSubmissionKey &&
+      card.zernioSubmissionAccountId === args.redditAccountId
+    ) {
+      return { idempotencyKey: card.zernioSubmissionKey }
+    }
+
+    const idempotencyKey = `astreex:${args.cardId}:${args.redditAccountId}`
+    await ctx.db.patch(args.cardId, {
+      zernioSubmissionKey: idempotencyKey,
+      zernioSubmissionAccountId: args.redditAccountId,
+    })
+    return { idempotencyKey }
+  },
+})
+
 export const markPostSucceeded = internalMutation({
   args: {
     cardId: v.id("cards"),
     redditAccountId: v.id("redditAccounts"),
     redditId: v.string(),
     redditThingId: v.optional(v.string()),
+    zernioPostId: v.optional(v.string()),
     permalink: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -420,6 +553,7 @@ export const markPostSucceeded = internalMutation({
       redditAccountId: args.redditAccountId,
       redditId: args.redditId,
       redditThingId,
+      zernioPostId: args.zernioPostId,
       subreddit,
       type: card.type,
       permalink: args.permalink,

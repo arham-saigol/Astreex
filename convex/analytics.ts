@@ -290,7 +290,7 @@ export const refreshAnalytics = action({
       return { refreshed: false }
     }
 
-    // TODO: wire up Reddit fetch once OAuth is complete
+    // TODO: wire up provider analytics once available.
 
     await ctx.runMutation(internal.analytics.markAnalyticsRefreshed, {
       projectId: args.projectId,

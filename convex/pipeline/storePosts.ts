@@ -28,6 +28,7 @@ export const storeNewPosts = internalMutation({
       const surfacedPostId = await ctx.db.insert("surfacedPosts", {
         projectId: args.projectId,
         redditPostId: post.redditPostId,
+        redditThingId: post.redditThingId,
         subreddit: post.subreddit,
         title: post.title,
         selftext: post.selftext,

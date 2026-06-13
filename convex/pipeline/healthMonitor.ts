@@ -1,12 +1,14 @@
 import { v } from "convex/values"
+import { paginationOptsValidator } from "convex/server"
 import { internal } from "../_generated/api"
 import type { Doc, Id } from "../_generated/dataModel"
 import { internalAction, internalMutation, internalQuery } from "../_generated/server"
+import { post as fetchLayerPost, type FetchLayerComment, type FetchLayerPost } from "../lib/fetchLayer"
+import { getAccountHealth, normalizeAccountHealth } from "../lib/zernio"
 
 const batchSize = 30
 const sevenDaysMs = 7 * 24 * 60 * 60 * 1000
 const tenMinutesMs = 10 * 60 * 1000
-const userAgent = "astreex/0.1"
 
 const visibilityValidator = v.union(
   v.literal("visible"),
@@ -23,40 +25,98 @@ type HealthStatus = "healthy" | "warning" | "banned"
 type BatchRow = Doc<"postedContent"> & {
   backfillRedditAccountId?: Id<"redditAccounts">
   resolvedType?: "reply" | "original"
+  parentUrl?: string
 }
 
-function wait(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms))
-}
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  mapper: (item: T) => Promise<R>,
+) {
+  const results: R[] = []
+  let nextIndex = 0
 
-function deriveThingId(row: BatchRow) {
-  if (row.redditThingId) return row.redditThingId
-  if (row.resolvedType === "original" || row.type === "original") {
-    return `t3_${row.redditId}`
+  async function worker() {
+    while (nextIndex < items.length) {
+      const index = nextIndex++
+      results[index] = await mapper(items[index])
+    }
   }
-  return `t1_${row.redditId}`
+
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, items.length) }, () => worker()),
+  )
+  return results
 }
 
-function removedOrDeleted(data: Record<string, unknown>) {
+function removedOrDeleted(data: {
+  removed?: boolean
+  deleted?: boolean
+  author?: string
+  body?: string
+  text?: string
+  selftext?: string
+}) {
   return Boolean(
-    data.removed_by_category ||
-      data.banned_by ||
+    data.removed ||
+      data.deleted ||
       data.author === "[deleted]" ||
       data.body === "[removed]" ||
       data.body === "[deleted]" ||
+      data.text === "[removed]" ||
+      data.text === "[deleted]" ||
       data.selftext === "[removed]" ||
       data.selftext === "[deleted]",
   )
 }
 
-function classifyListing(json: unknown, thingId: string) {
-  const root = json as {
-    data?: {
-      children?: Array<{ data?: Record<string, unknown> }>
+function postComments(payload: FetchLayerPost) {
+  return Array.isArray(payload.comments) ? payload.comments : []
+}
+
+function commentMatches(comment: FetchLayerComment, redditId: string, thingId: string) {
+  const ids = [comment.id, comment.name, comment.fullname].filter(Boolean)
+  return ids.some((id) => id === redditId || id === thingId || id === `t1_${redditId}`)
+}
+
+function findComment(
+  comments: FetchLayerComment[],
+  redditId: string,
+  thingId: string,
+): FetchLayerComment | null {
+  for (const comment of comments) {
+    if (commentMatches(comment, redditId, thingId)) return comment
+    const nested = findComment(
+      [
+        ...(Array.isArray(comment.replies) ? comment.replies : []),
+        ...(Array.isArray(comment.comments) ? comment.comments : []),
+      ],
+      redditId,
+      thingId,
+    )
+    if (nested) return nested
+  }
+  return null
+}
+
+function classifyPost(payload: FetchLayerPost) {
+  if (removedOrDeleted(payload)) {
+    return {
+      visibility: "removed" as const,
+      score: payload.score,
+      replyCount: payload.numComments ?? payload.num_comments ?? payload.commentCount,
     }
   }
-  const child = root?.data?.children?.find((item) => item.data?.name === thingId)
-  if (!child?.data) {
+
+  return {
+    visibility: "visible" as const,
+    score: payload.score,
+    replyCount: payload.numComments ?? payload.num_comments ?? payload.commentCount,
+  }
+}
+
+function classifyComment(comment: FetchLayerComment | null) {
+  if (!comment) {
     return {
       visibility: "shadow_hidden" as const,
       score: undefined,
@@ -64,31 +124,22 @@ function classifyListing(json: unknown, thingId: string) {
     }
   }
 
-  if (removedOrDeleted(child.data)) {
+  if (removedOrDeleted(comment)) {
     return {
       visibility: "removed" as const,
-      score: typeof child.data.score === "number" ? child.data.score : undefined,
-      replyCount: typeof child.data.num_comments === "number"
-        ? child.data.num_comments
-        : undefined,
+      score: comment.score,
+      replyCount: undefined,
     }
   }
 
-  const replies = child.data.replies as
-    | { data?: { children?: unknown[] } }
-    | string
-    | undefined
-  const visibleReplies =
-    replies && typeof replies === "object" && Array.isArray(replies.data?.children)
-      ? replies.data.children.length
-      : undefined
-
   return {
     visibility: "visible" as const,
-    score: typeof child.data.score === "number" ? child.data.score : undefined,
-    replyCount: typeof child.data.num_comments === "number"
-      ? child.data.num_comments
-      : visibleReplies,
+    score: comment.score,
+    replyCount: Array.isArray(comment.replies)
+      ? comment.replies.length
+      : Array.isArray(comment.comments)
+        ? comment.comments.length
+        : undefined,
   }
 }
 
@@ -112,14 +163,28 @@ export const checkAccountHealth = internalAction({
 
     for (let index = 0; index < batch.rows.length; index++) {
       const row = batch.rows[index]
-      const thingId = deriveThingId(row)
-      const response = await fetch(
-        `https://www.reddit.com/api/info.json?id=${encodeURIComponent(thingId)}`,
-        { headers: { "User-Agent": userAgent } },
-      )
+      const type = row.resolvedType ?? row.type
+      const thingId = row.redditThingId ?? `${type === "original" ? "t3" : "t1"}_${row.redditId}`
+      const url =
+        type === "reply"
+          ? row.parentUrl ?? row.permalink
+          : row.permalink ??
+            `https://www.reddit.com/r/${row.subreddit}/comments/${row.redditId}`
+      if (!url) continue
 
-      if (response.status === 429) {
+      let result: ReturnType<typeof classifyPost> | ReturnType<typeof classifyComment>
+      try {
+        const payload = await fetchLayerPost(ctx, { url, pages: 2 })
+        result = type === "reply"
+          ? classifyComment(findComment(postComments(payload), row.redditId, thingId))
+          : classifyPost(payload)
+      } catch (error) {
         rateLimited = true
+        console.warn(
+          `FetchLayer health check failed: ${
+            error instanceof Error ? error.message : "request failed"
+          }`,
+        )
         await ctx.scheduler.runAfter(
           tenMinutesMs,
           internal.pipeline.healthMonitor.checkAccountHealth,
@@ -127,20 +192,6 @@ export const checkAccountHealth = internalAction({
         )
         break
       }
-
-      if (!response.ok) {
-        rateLimited = true
-        console.warn(`Reddit health check failed with status ${response.status}`)
-        await ctx.scheduler.runAfter(
-          tenMinutesMs,
-          internal.pipeline.healthMonitor.checkAccountHealth,
-          { beforeCreatedAt, cutoffCreatedAt },
-        )
-        break
-      }
-
-      const json = await response.json()
-      const result = classifyListing(json, thingId)
 
       await ctx.runMutation(
         internal.pipeline.healthMonitor.updatePostedContentVisibility,
@@ -157,9 +208,6 @@ export const checkAccountHealth = internalAction({
       if (redditAccountId) affectedAccounts.add(redditAccountId)
       lastProcessedCreatedAt = row.createdAt
 
-      if (index < batch.rows.length - 1) {
-        await wait(2000)
-      }
     }
 
     for (const redditAccountId of affectedAccounts) {
@@ -211,6 +259,76 @@ export const checkAccountHealth = internalAction({
   },
 })
 
+export const syncZernioProviderHealth = internalAction({
+  args: {},
+  handler: async (ctx) => {
+    let cursor: string | null = null
+    let isDone = false
+
+    while (!isDone) {
+      const accounts: {
+        page: Array<{
+          _id: Id<"redditAccounts">
+          zernioAccountId: string
+        }>
+        isDone: boolean
+        continueCursor: string
+      } = await ctx.runQuery(
+        internal.pipeline.healthMonitor.loadConnectedProviderAccounts,
+        { paginationOpts: { numItems: 100, cursor } },
+      )
+
+      await mapWithConcurrency(accounts.page, 5, async (account) => {
+        try {
+          const health = normalizeAccountHealth(
+            await getAccountHealth(ctx, account.zernioAccountId),
+          )
+          await ctx.runMutation(internal.reddit.updateProviderHealth, {
+            redditAccountId: account._id,
+            providerHealthStatus: health.status,
+            providerCanPost: health.canPost,
+            providerNeedsReconnect: health.needsReconnect,
+            providerIssues: health.issues,
+          })
+        } catch (error) {
+          await ctx.runMutation(internal.reddit.updateProviderHealth, {
+            redditAccountId: account._id,
+            providerHealthStatus: "error",
+            providerCanPost: false,
+            providerNeedsReconnect: false,
+            providerIssues: [
+              error instanceof Error ? error.message.slice(0, 240) : "Health check failed",
+            ],
+          })
+        }
+      })
+
+      cursor = accounts.continueCursor
+      isDone = accounts.isDone
+    }
+  },
+})
+
+export const loadConnectedProviderAccounts = internalQuery({
+  args: {
+    paginationOpts: paginationOptsValidator,
+  },
+  handler: async (ctx, args) => {
+    const rows = await ctx.db
+      .query("redditAccounts")
+      .paginate(args.paginationOpts)
+    return {
+      ...rows,
+      page: rows.page
+        .filter((row) => row.isActive)
+        .map((row) => ({
+          _id: row._id,
+          zernioAccountId: row.zernioAccountId,
+        })),
+    }
+  },
+})
+
 export const loadRecentPostedBatch = internalQuery({
   args: {
     beforeCreatedAt: v.number(),
@@ -233,10 +351,14 @@ export const loadRecentPostedBatch = internalQuery({
       }
 
       const card = await ctx.db.get(row.cardId)
+      const surfacedPost = card?.surfacedPostId
+        ? await ctx.db.get(card.surfacedPostId)
+        : null
       result.push({
         ...row,
         backfillRedditAccountId: row.redditAccountId ?? card?.redditAccountId,
         resolvedType: row.type ?? card?.type,
+        parentUrl: surfacedPost?.url,
       })
     }
 

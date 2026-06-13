@@ -1,44 +1,30 @@
 import { v } from "convex/values"
+import { api, internal } from "./_generated/api"
 import {
-  internalAction,
+  action,
   internalMutation,
-  internalQuery,
-  mutation,
   query,
-  type ActionCtx,
   type MutationCtx,
   type QueryCtx,
 } from "./_generated/server"
-import { internal } from "./_generated/api"
 import type { Id } from "./_generated/dataModel"
 import { getPlanLimits } from "./lib/planLimits"
+import {
+  createZernioProfile,
+  deleteZernioProfile,
+  getAccountDetails,
+  getAccountHealth,
+  normalizeAccountHealth,
+  zernioAccountId,
+  zernioAccountProfileId,
+  zernioAccountUsername,
+} from "./lib/zernio"
 
-type TokenRow = {
-  accessToken: string
-  refreshToken: string
-  tokenExpiresAt: number
-}
-
-async function fetchWithTimeout(
-  input: RequestInfo | URL,
-  init: RequestInit,
-  timeoutMs: number,
-  label: string,
-) {
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), timeoutMs)
-
-  try {
-    return await fetch(input, { ...init, signal: controller.signal })
-  } catch (error) {
-    if (error instanceof DOMException && error.name === "AbortError") {
-      throw new Error(`${label} timed out`)
-    }
-    throw error
-  } finally {
-    clearTimeout(timer)
-  }
-}
+const healthStatusValidator = v.union(
+  v.literal("healthy"),
+  v.literal("warning"),
+  v.literal("banned"),
+)
 
 async function getCurrentUser(ctx: QueryCtx | MutationCtx) {
   const identity = await ctx.auth.getUserIdentity()
@@ -75,68 +61,6 @@ function validateRedditUsername(username: string) {
   return trimmed
 }
 
-function base64UrlToBytes(value: string) {
-  const base64 = value.replace(/-/g, "+").replace(/_/g, "/")
-  const padded = base64.padEnd(base64.length + ((4 - (base64.length % 4)) % 4), "=")
-  const binary = atob(padded)
-  const bytes = new Uint8Array(binary.length)
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i)
-  }
-  return bytes
-}
-
-function bytesToBase64Url(bytes: Uint8Array) {
-  let binary = ""
-  for (const byte of bytes) {
-    binary += String.fromCharCode(byte)
-  }
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")
-}
-
-async function getAesKey(usage: KeyUsage[]) {
-  const encodedKey = process.env.REDDIT_TOKEN_ENCRYPTION_KEY
-  if (!encodedKey) {
-    throw new Error("REDDIT_TOKEN_ENCRYPTION_KEY is not configured")
-  }
-
-  const keyBytes = base64UrlToBytes(encodedKey)
-  if (keyBytes.byteLength !== 32) {
-    throw new Error("REDDIT_TOKEN_ENCRYPTION_KEY must decode to 32 bytes")
-  }
-
-  return await crypto.subtle.importKey("raw", keyBytes, "AES-GCM", false, usage)
-}
-
-async function encryptToken(token: string) {
-  const key = await getAesKey(["encrypt"])
-  const iv = crypto.getRandomValues(new Uint8Array(12))
-  const plaintext = new TextEncoder().encode(token)
-  const ciphertext = await crypto.subtle.encrypt(
-    { name: "AES-GCM", iv },
-    key,
-    plaintext,
-  )
-
-  return `v1:${bytesToBase64Url(iv)}:${bytesToBase64Url(new Uint8Array(ciphertext))}`
-}
-
-async function decryptToken(payload: string) {
-  const parts = payload.split(":")
-  if (parts.length !== 3 || parts[0] !== "v1") {
-    throw new Error("Reddit token is not encrypted")
-  }
-
-  const key = await getAesKey(["decrypt"])
-  const plaintext = await crypto.subtle.decrypt(
-    { name: "AES-GCM", iv: base64UrlToBytes(parts[1]) },
-    key,
-    base64UrlToBytes(parts[2]),
-  )
-
-  return new TextDecoder().decode(plaintext)
-}
-
 async function loadActiveProjectAccounts(
   ctx: QueryCtx | MutationCtx,
   projectId: Id<"projects">,
@@ -154,77 +78,19 @@ async function loadActiveProjectAccounts(
   return activeAccounts
 }
 
-async function refreshTokenForAccount(
-  ctx: ActionCtx,
-  redditAccountId: Id<"redditAccounts">,
-): Promise<string> {
-  const account: TokenRow | null = await ctx.runQuery(
-    internal.reddit.loadAccountTokenFields,
-    { redditAccountId },
-  )
-  if (!account) throw new Error("Reddit account not found")
-
-  const clientId = process.env.REDDIT_CLIENT_ID
-  const clientSecret = process.env.REDDIT_CLIENT_SECRET
-  if (!clientId || !clientSecret) {
-    throw new Error("Reddit OAuth is not configured")
-  }
-
-  const refreshToken = await decryptToken(account.refreshToken)
-  const body = new URLSearchParams({
-    grant_type: "refresh_token",
-    refresh_token: refreshToken,
-  })
-
-  const response = await fetchWithTimeout(
-    "https://www.reddit.com/api/v1/access_token",
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Basic ${btoa(`${clientId}:${clientSecret}`)}`,
-        "Content-Type": "application/x-www-form-urlencoded",
-        "User-Agent": "astreex/0.1",
-      },
-      body,
-    },
-    10_000,
-    "Reddit token refresh",
-  )
-
-  if (!response.ok) {
-    throw new Error("Failed to refresh Reddit token")
-  }
-
-  const tokenResponse = (await response.json()) as {
-    access_token?: string
-    refresh_token?: string
-    expires_in?: number
-  }
-
-  if (!tokenResponse.access_token || !tokenResponse.expires_in) {
-    throw new Error("Reddit token refresh response was incomplete")
-  }
-
-  const encryptedAccessToken = await encryptToken(tokenResponse.access_token)
-  const encryptedRefreshToken = tokenResponse.refresh_token
-    ? await encryptToken(tokenResponse.refresh_token)
-    : undefined
-
-  await ctx.runMutation(internal.reddit.updateRefreshedToken, {
-    redditAccountId,
-    encryptedAccessToken,
-    encryptedRefreshToken,
-    tokenExpiresAt: Date.now() + tokenResponse.expires_in * 1000,
-  })
-
-  return tokenResponse.access_token
-}
-
-export const getOAuthAuthorizationContext = query({
+export const getConnectContext = query({
   args: {
     projectId: v.id("projects"),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<{
+    projectId: Id<"projects">
+    projectName: string
+    zernioProfileId: string | null
+    canAddAccount: boolean
+    accountLimit: number
+    usedAccounts: number
+    message?: string
+  }> => {
     const project = await getOwnedProject(ctx, args.projectId)
     const accountLimit = getPlanLimits(project.plan).maxRedditAccounts
     const accounts = await loadActiveProjectAccounts(
@@ -236,6 +102,8 @@ export const getOAuthAuthorizationContext = query({
 
     return {
       projectId: project._id,
+      projectName: project.name,
+      zernioProfileId: project.zernioProfileId ?? null,
       canAddAccount,
       accountLimit,
       usedAccounts: accounts.length,
@@ -246,29 +114,151 @@ export const getOAuthAuthorizationContext = query({
   },
 })
 
-export const upsertOAuthAccount = mutation({
+export const ensureZernioProfileForConnect = action({
+  args: {
+    projectId: v.id("projects"),
+  },
+  handler: async (ctx, args): Promise<{
+    projectId: Id<"projects">
+    projectName: string
+    zernioProfileId: string | null
+    canAddAccount: boolean
+    accountLimit: number
+    usedAccounts: number
+    message?: string
+  }> => {
+    const context: {
+      projectId: Id<"projects">
+      projectName: string
+      zernioProfileId: string | null
+      canAddAccount: boolean
+      accountLimit: number
+      usedAccounts: number
+      message?: string
+    } = await ctx.runQuery(api.reddit.getConnectContext, {
+      projectId: args.projectId,
+    })
+    if (!context.canAddAccount) return context
+
+    let zernioProfileId = context.zernioProfileId ?? undefined
+    if (!zernioProfileId) {
+      const createdZernioProfileId = await createZernioProfile(ctx, context.projectName)
+      const canonicalZernioProfileId: string = await ctx.runMutation(
+        internal.reddit.saveZernioProfileId,
+        {
+          projectId: args.projectId,
+          zernioProfileId: createdZernioProfileId,
+        },
+      )
+      if (canonicalZernioProfileId !== createdZernioProfileId) {
+        await deleteZernioProfile(ctx, createdZernioProfileId)
+      }
+      zernioProfileId = canonicalZernioProfileId
+    }
+
+    return { ...context, zernioProfileId }
+  },
+})
+
+export const completeZernioAccountConnect = action({
+  args: {
+    projectId: v.id("projects"),
+    zernioAccountId: v.string(),
+    zernioProfileId: v.string(),
+  },
+  handler: async (ctx, args): Promise<{ redditAccountId: Id<"redditAccounts"> }> => {
+    const context: {
+      zernioProfileId: string | null
+      canAddAccount: boolean
+      message?: string
+    } = await ctx.runQuery(api.reddit.getConnectContext, {
+      projectId: args.projectId,
+    })
+    if (!context.canAddAccount) {
+      throw new Error(context.message ?? "Reddit account limit reached for this plan")
+    }
+    if (context.zernioProfileId !== args.zernioProfileId) {
+      throw new Error("Invalid Zernio profile")
+    }
+
+    const accountPromise = getAccountDetails(ctx, args.zernioAccountId)
+    const healthPromise = getAccountHealth(ctx, args.zernioAccountId)
+    const account = await accountPromise
+    const authoritativeAccountId = zernioAccountId(account)
+    const authoritativeProfileId = zernioAccountProfileId(account)
+    const redditUsername = zernioAccountUsername(account)
+    if (
+      (authoritativeAccountId && authoritativeAccountId !== args.zernioAccountId) ||
+      authoritativeProfileId !== args.zernioProfileId ||
+      !redditUsername
+    ) {
+      void healthPromise.catch(() => null)
+      throw new Error("Unauthorized Zernio account")
+    }
+
+    const providerHealth = normalizeAccountHealth(await healthPromise)
+    return await ctx.runMutation(internal.reddit.upsertZernioAccount, {
+      projectId: args.projectId,
+      redditUsername,
+      zernioAccountId: args.zernioAccountId,
+      providerHealthStatus: providerHealth.status,
+      providerCanPost: providerHealth.canPost,
+      providerNeedsReconnect: providerHealth.needsReconnect,
+      providerIssues: providerHealth.issues,
+    })
+  },
+})
+
+export const saveZernioProfileId = internalMutation({
+  args: {
+    projectId: v.id("projects"),
+    zernioProfileId: v.string(),
+  },
+  handler: async (ctx, args): Promise<string> => {
+    await getOwnedProject(ctx, args.projectId)
+
+    const project = await ctx.db.get(args.projectId)
+    if (project?.zernioProfileId) {
+      return project.zernioProfileId
+    }
+
+    await ctx.db.patch(args.projectId, {
+      zernioProfileId: args.zernioProfileId,
+      lastActiveAt: Date.now(),
+    })
+    return args.zernioProfileId
+  },
+})
+
+export const upsertZernioAccount = internalMutation({
   args: {
     projectId: v.id("projects"),
     redditUsername: v.string(),
-    accessToken: v.string(),
-    refreshToken: v.string(),
-    tokenExpiresAt: v.number(),
+    zernioAccountId: v.string(),
+    providerHealthStatus: v.optional(v.string()),
+    providerCanPost: v.optional(v.boolean()),
+    providerNeedsReconnect: v.optional(v.boolean()),
+    providerIssues: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args) => {
     const project = await getOwnedProject(ctx, args.projectId)
     const redditUsername = validateRedditUsername(args.redditUsername)
     const accountLimit = getPlanLimits(project.plan).maxRedditAccounts
+    const now = Date.now()
 
-    const existing = await ctx.db
+    const existingByAccountId = await ctx.db
+      .query("redditAccounts")
+      .withIndex("by_projectId_and_zernioAccountId", (q) =>
+        q.eq("projectId", args.projectId).eq("zernioAccountId", args.zernioAccountId),
+      )
+      .unique()
+    const existingByUsername = await ctx.db
       .query("redditAccounts")
       .withIndex("by_projectId_and_redditUsername", (q) =>
         q.eq("projectId", args.projectId).eq("redditUsername", redditUsername),
       )
       .unique()
-
-    const encryptedAccessToken = await encryptToken(args.accessToken)
-    const encryptedRefreshToken = await encryptToken(args.refreshToken)
-    const now = Date.now()
+    const existing = existingByAccountId ?? existingByUsername
 
     if (existing) {
       if (!existing.isActive) {
@@ -283,12 +273,16 @@ export const upsertOAuthAccount = mutation({
       }
 
       await ctx.db.patch(existing._id, {
-        accessToken: encryptedAccessToken,
-        refreshToken: encryptedRefreshToken,
-        tokenExpiresAt: args.tokenExpiresAt,
+        redditUsername,
+        zernioAccountId: args.zernioAccountId,
         isActive: true,
         healthStatus: "healthy",
         lastCheckedAt: now,
+        providerHealthStatus: args.providerHealthStatus,
+        providerCanPost: args.providerCanPost,
+        providerNeedsReconnect: args.providerNeedsReconnect,
+        providerIssues: args.providerIssues,
+        providerLastCheckedAt: now,
       })
       return { redditAccountId: existing._id }
     }
@@ -305,12 +299,15 @@ export const upsertOAuthAccount = mutation({
     const redditAccountId = await ctx.db.insert("redditAccounts", {
       projectId: args.projectId,
       redditUsername,
-      accessToken: encryptedAccessToken,
-      refreshToken: encryptedRefreshToken,
-      tokenExpiresAt: args.tokenExpiresAt,
+      zernioAccountId: args.zernioAccountId,
       isActive: true,
       healthStatus: "healthy",
       lastCheckedAt: now,
+      providerHealthStatus: args.providerHealthStatus,
+      providerCanPost: args.providerCanPost,
+      providerNeedsReconnect: args.providerNeedsReconnect,
+      providerIssues: args.providerIssues,
+      providerLastCheckedAt: now,
       createdAt: now,
     })
 
@@ -318,71 +315,10 @@ export const upsertOAuthAccount = mutation({
   },
 })
 
-export const loadAccountTokenFields = internalQuery({
-  args: {
-    redditAccountId: v.id("redditAccounts"),
-  },
-  handler: async (ctx, args) => {
-    const account = await ctx.db.get(args.redditAccountId)
-    if (!account) return null
-
-    return {
-      accessToken: account.accessToken,
-      refreshToken: account.refreshToken,
-      tokenExpiresAt: account.tokenExpiresAt,
-    }
-  },
-})
-
-export const updateRefreshedToken = internalMutation({
-  args: {
-    redditAccountId: v.id("redditAccounts"),
-    encryptedAccessToken: v.string(),
-    encryptedRefreshToken: v.optional(v.string()),
-    tokenExpiresAt: v.number(),
-  },
-  handler: async (ctx, args) => {
-    const patch: {
-      accessToken: string
-      refreshToken?: string
-      tokenExpiresAt: number
-      lastCheckedAt: number
-      healthStatus: "healthy"
-    } = {
-      accessToken: args.encryptedAccessToken,
-      tokenExpiresAt: args.tokenExpiresAt,
-      lastCheckedAt: Date.now(),
-      healthStatus: "healthy",
-    }
-
-    if (args.encryptedRefreshToken) {
-      patch.refreshToken = args.encryptedRefreshToken
-    }
-
-    await ctx.db.patch(args.redditAccountId, patch)
-  },
-})
-
-export const markAccountWarning = internalMutation({
-  args: {
-    redditAccountId: v.id("redditAccounts"),
-  },
-  handler: async (ctx, args) => {
-    await ctx.db.patch(args.redditAccountId, {
-      healthStatus: "warning",
-      lastCheckedAt: Date.now(),
-    })
-  },
-})
-
 export const setAccountHealthStatus = internalMutation({
   args: {
     redditAccountId: v.id("redditAccounts"),
-    healthStatus: v.union(
-      v.literal("healthy"),
-      v.literal("warning"),
-      v.literal("banned"),
-    ),
+    healthStatus: healthStatusValidator,
   },
   handler: async (ctx, args) => {
     await ctx.db.patch(args.redditAccountId, {
@@ -392,37 +328,21 @@ export const setAccountHealthStatus = internalMutation({
   },
 })
 
-export const refreshRedditToken = internalAction({
+export const updateProviderHealth = internalMutation({
   args: {
     redditAccountId: v.id("redditAccounts"),
+    providerHealthStatus: v.string(),
+    providerCanPost: v.boolean(),
+    providerNeedsReconnect: v.boolean(),
+    providerIssues: v.array(v.string()),
   },
-  handler: async (ctx, args): Promise<string> => {
-    try {
-      return await refreshTokenForAccount(ctx, args.redditAccountId)
-    } catch (error) {
-      await ctx.runMutation(internal.reddit.markAccountWarning, {
-        redditAccountId: args.redditAccountId,
-      })
-      throw error
-    }
-  },
-})
-
-export const getValidToken = internalAction({
-  args: {
-    redditAccountId: v.id("redditAccounts"),
-  },
-  handler: async (ctx, args): Promise<string> => {
-    const account: TokenRow | null = await ctx.runQuery(
-      internal.reddit.loadAccountTokenFields,
-      { redditAccountId: args.redditAccountId },
-    )
-    if (!account) throw new Error("Reddit account not found")
-
-    if (account.tokenExpiresAt > Date.now() + 60_000) {
-      return await decryptToken(account.accessToken)
-    }
-
-    return await refreshTokenForAccount(ctx, args.redditAccountId)
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.redditAccountId, {
+      providerHealthStatus: args.providerHealthStatus,
+      providerCanPost: args.providerCanPost,
+      providerNeedsReconnect: args.providerNeedsReconnect,
+      providerIssues: args.providerIssues,
+      providerLastCheckedAt: Date.now(),
+    })
   },
 })

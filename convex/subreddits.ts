@@ -1,6 +1,16 @@
 import { v } from "convex/values"
-import { mutation, query } from "./_generated/server"
+import { internal } from "./_generated/api"
+import {
+  action,
+  internalMutation,
+  internalQuery,
+  mutation,
+  query,
+} from "./_generated/server"
 import { getPlanLimits } from "./lib/planLimits"
+import { communityDetails, communityFromDetails } from "./lib/fetchLayer"
+import { validateSubreddit } from "./lib/zernio"
+import { stringifyRulesJson } from "./lib/rules"
 
 const SUBREDDIT_LIMIT_ERROR =
   "You've reached the subreddit limit for your plan. Upgrade to add more."
@@ -127,7 +137,21 @@ export const toggleSubreddit = mutation({
   },
 })
 
-export const addSubreddit = mutation({
+function normalizeSubredditName(name: string) {
+  const cleanName = name.replace(/^r\//i, "").trim().toLowerCase()
+  if (!/^[a-z0-9_]{3,21}$/.test(cleanName)) {
+    throw new Error("INVALID_SUBREDDIT_NAME")
+  }
+  return cleanName
+}
+
+function validZernioValidation(payload: unknown) {
+  if (!payload || typeof payload !== "object") return false
+  const record = payload as Record<string, unknown>
+  return record.valid === true && record.exists === true && record.ok === true
+}
+
+export const loadManualAddContext = internalQuery({
   args: {
     name: v.string(),
   },
@@ -147,11 +171,7 @@ export const addSubreddit = mutation({
       .first()
     if (!project) throw new Error("No project found")
 
-    // Normalize name: strip r/ prefix and whitespace
-    const cleanName = args.name.replace(/^r\//i, "").trim().toLowerCase()
-    if (!/^[a-z0-9_]{3,21}$/.test(cleanName)) {
-      throw new Error("INVALID_SUBREDDIT_NAME")
-    }
+    const cleanName = normalizeSubredditName(args.name)
 
     // Check for duplicate
     const existing = await ctx.db
@@ -175,8 +195,48 @@ export const addSubreddit = mutation({
     }
 
     // Hardcoded scoring for now — will be replaced by AI agent
+    return { projectId: project._id, cleanName }
+  },
+})
+
+export const insertManualSubreddit = internalMutation({
+  args: {
+    projectId: v.id("projects"),
+    name: v.string(),
+    memberCount: v.optional(v.number()),
+    description: v.optional(v.string()),
+    rulesJson: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const project = await ctx.db.get(args.projectId)
+    if (!project) throw new Error("No project found")
+
+    const cleanName = normalizeSubredditName(args.name)
+
+    const existing = await ctx.db
+      .query("subreddits")
+      .withIndex("by_projectId_and_name", (q) =>
+        q.eq("projectId", project._id).eq("name", cleanName),
+      )
+      .first()
+    if (existing) throw new Error("DUPLICATE")
+
+    const limits = getPlanLimits(project.plan)
+    const activeSubs = await ctx.db
+      .query("subreddits")
+      .withIndex("by_projectId_active", (q) =>
+        q.eq("projectId", project._id).eq("active", true)
+      )
+      .take(limits.maxSubreddits)
+
+    if (activeSubs.length >= limits.maxSubreddits) {
+      throw new Error(SUBREDDIT_LIMIT_ERROR)
+    }
+
     const relevanceScore = 75
-    const reasoning = "Added by user"
+    const reasoning = args.description
+      ? `Added by user. r/${cleanName}: ${args.description.slice(0, 180)}`
+      : "Added by user"
 
     // Quality gate
     if (relevanceScore < 20) {
@@ -186,6 +246,9 @@ export const addSubreddit = mutation({
     const id = await ctx.db.insert("subreddits", {
       projectId: project._id,
       name: cleanName,
+      memberCount: args.memberCount,
+      description: args.description,
+      rulesJson: args.rulesJson,
       relevanceScore,
       reasoning,
       active: true,
@@ -194,5 +257,54 @@ export const addSubreddit = mutation({
     })
 
     return { id, relevanceScore, name: cleanName }
+  },
+})
+
+export const addSubreddit = action({
+  args: {
+    name: v.string(),
+  },
+  handler: async (ctx, args): Promise<{
+    id: string
+    relevanceScore: number
+    name: string
+  }> => {
+    const context: { projectId: string; cleanName: string } = await ctx.runQuery(
+      internal.subreddits.loadManualAddContext,
+      { name: args.name },
+    )
+
+    const validationPromise = validateSubreddit(ctx, context.cleanName)
+    const detailsPromise = communityDetails(ctx, context.cleanName)
+
+    const validation = await validationPromise
+    if (!validZernioValidation(validation)) {
+      void detailsPromise.catch(() => null)
+      throw new Error("INVALID_SUBREDDIT_NAME")
+    }
+
+    const detailsPayload = await detailsPromise
+    const details = communityFromDetails(detailsPayload)
+    const memberCount =
+      typeof details.subscribers === "number"
+        ? details.subscribers
+        : typeof details.memberCount === "number"
+          ? details.memberCount
+          : typeof details.members === "number"
+            ? details.members
+            : undefined
+    const description =
+      details.publicDescription ??
+      details.public_description ??
+      details.description ??
+      undefined
+
+    return await ctx.runMutation(internal.subreddits.insertManualSubreddit, {
+      projectId: context.projectId as never,
+      name: context.cleanName,
+      memberCount,
+      description: description?.slice(0, 1000),
+      rulesJson: details.rules === undefined ? undefined : stringifyRulesJson(details.rules),
+    })
   },
 })

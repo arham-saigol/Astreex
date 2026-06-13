@@ -10,6 +10,12 @@ import { sanitizeJudgeSelection } from "./lib/judgeSelection"
 import { getPipelineLimits } from "./lib/planLimits"
 import { localDateAndHour } from "./crons"
 import { isValidBrandProfile } from "./pipeline/data"
+import { stringifyRulesJson } from "./lib/rules"
+import {
+  zernioAccountId,
+  zernioAccountProfileId,
+  zernioAccountUsername,
+} from "./lib/zernio"
 
 const modules = import.meta.glob("./**/*.ts")
 
@@ -22,12 +28,8 @@ afterEach(() => {
 
 function stubRequiredEnv() {
   vi.stubEnv("DEEPSEEK_API_KEY", "test")
-  vi.stubEnv("REDDIT_CLIENT_ID", "client")
-  vi.stubEnv("REDDIT_CLIENT_SECRET", "secret")
-  vi.stubEnv(
-    "REDDIT_TOKEN_ENCRYPTION_KEY",
-    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-  )
+  vi.stubEnv("ZERNIO_API_KEY", "zernio")
+  vi.stubEnv("FETCHLAYER_API_KEY", "fetchlayer")
 }
 
 beforeEach(() => {
@@ -68,9 +70,8 @@ async function seedRedditAccount(
     return await ctx.db.insert("redditAccounts", {
       projectId,
       redditUsername: overrides.redditUsername ?? "founder1",
-      accessToken: "encrypted",
-      refreshToken: "encrypted",
-      tokenExpiresAt: Date.now() + 60_000,
+      zernioAccountId: `zernio_${overrides.redditUsername ?? "founder1"}`,
+      providerCanPost: true,
       isActive: overrides.isActive ?? true,
       healthStatus: overrides.healthStatus ?? "healthy",
       createdAt: Date.now(),
@@ -134,6 +135,28 @@ describe("pipeline helpers", () => {
     expect(candidatePoolSize(5)).toBe(40)
     expect(candidatePoolSize(20)).toBe(80)
     expect(candidatePoolSize(100)).toBe(180)
+  })
+
+  test("stringifyRulesJson handles unsanitizable rules", () => {
+    expect(stringifyRulesJson(undefined)).toBe("")
+    expect(stringifyRulesJson(Symbol("bad"))).toBe("")
+  })
+
+  test("Zernio account helpers preserve top-level account fields", () => {
+    const account = {
+      id: "top_account",
+      redditUsername: "top_user",
+      profileId: "top_profile",
+      account: {
+        id: "nested_account",
+        username: "nested_user",
+        profileId: "nested_profile",
+      },
+    }
+
+    expect(zernioAccountId(account)).toBe("top_account")
+    expect(zernioAccountUsername(account)).toBe("top_user")
+    expect(zernioAccountProfileId(account)).toBe("top_profile")
   })
 
   test("judge sanitization removes invalid indices and enforces originals", () => {
@@ -285,9 +308,8 @@ describe("pipeline Convex mutations", () => {
       const account1 = await ctx.db.insert("redditAccounts", {
         projectId,
         redditUsername: "founder1",
-        accessToken: "encrypted",
-        refreshToken: "encrypted",
-        tokenExpiresAt: Date.now() + 60_000,
+        zernioAccountId: "zernio_founder1",
+        providerCanPost: true,
         isActive: true,
         healthStatus: "healthy",
         createdAt: Date.now(),
@@ -295,9 +317,8 @@ describe("pipeline Convex mutations", () => {
       const account2 = await ctx.db.insert("redditAccounts", {
         projectId,
         redditUsername: "founder2",
-        accessToken: "encrypted",
-        refreshToken: "encrypted",
-        tokenExpiresAt: Date.now() + 60_000,
+        zernioAccountId: "zernio_founder2",
+        providerCanPost: true,
         isActive: true,
         healthStatus: "healthy",
         createdAt: Date.now(),
@@ -375,9 +396,8 @@ describe("pipeline Convex mutations", () => {
       const redditAccountId = await ctx.db.insert("redditAccounts", {
         projectId,
         redditUsername: "founder1",
-        accessToken: "encrypted",
-        refreshToken: "encrypted",
-        tokenExpiresAt: Date.now() + 60_000,
+        zernioAccountId: "zernio_founder1",
+        providerCanPost: true,
         isActive: true,
         healthStatus: "healthy",
         createdAt: Date.now(),
@@ -593,6 +613,26 @@ describe("posting scheduler", () => {
 })
 
 describe("poster helpers", () => {
+  test("saveZernioProfileId returns existing profile without overwriting it", async () => {
+    const t = convexTest(schema, modules)
+    const { projectId } = await seedProject(t)
+    const authed = t.withIdentity({ subject: "user_1" })
+
+    const first = await authed.mutation(internal.reddit.saveZernioProfileId, {
+      projectId,
+      zernioProfileId: "profile_a",
+    })
+    const second = await authed.mutation(internal.reddit.saveZernioProfileId, {
+      projectId,
+      zernioProfileId: "profile_b",
+    })
+    const project = await t.run(async (ctx) => await ctx.db.get(projectId))
+
+    expect(first).toBe("profile_a")
+    expect(second).toBe("profile_a")
+    expect(project?.zernioProfileId).toBe("profile_a")
+  })
+
   test("successful post mutation marks the card posted and inserts postedContent", async () => {
     const t = convexTest(schema, modules)
     const { projectId } = await seedProject(t)
@@ -625,6 +665,66 @@ describe("poster helpers", () => {
       type: "original",
       visibility: "visible",
     })
+  })
+
+  test("ensureZernioSubmission reuses the card/account idempotency key", async () => {
+    const t = convexTest(schema, modules)
+    const { projectId } = await seedProject(t)
+    const redditAccountId = await seedRedditAccount(t, projectId)
+    const cardId = await seedPendingCard(t, projectId, redditAccountId)
+
+    const first = await t.mutation(internal.pipeline.poster.ensureZernioSubmission, {
+      cardId,
+      redditAccountId,
+    })
+    const second = await t.mutation(internal.pipeline.poster.ensureZernioSubmission, {
+      cardId,
+      redditAccountId,
+    })
+    const card = await t.run(async (ctx) => await ctx.db.get(cardId))
+
+    expect(second.idempotencyKey).toBe(first.idempotencyKey)
+    expect(card?.zernioSubmissionKey).toBe(first.idempotencyKey)
+    expect(card?.zernioSubmissionAccountId).toBe(redditAccountId)
+  })
+
+  test("queued Zernio original post without top-level status schedules polling", async () => {
+    const t = convexTest(schema, modules)
+    const { projectId } = await seedProject(t)
+    const redditAccountId = await seedRedditAccount(t, projectId)
+    const cardId = await seedPendingCard(t, projectId, redditAccountId)
+    await t.run(async (ctx) => {
+      await ctx.db.patch(cardId, { status: "scheduled" })
+    })
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      new Response(
+        JSON.stringify({
+          post: {
+            id: "zernio_post_1",
+            platforms: [{ platform: "reddit", status: "queued" }],
+          },
+        }),
+        { status: 200 },
+      ),
+    )
+    vi.stubGlobal("fetch", fetchMock)
+
+    await t.action(internal.pipeline.poster.postToReddit, { cardId })
+
+    const { card, scheduled } = await t.run(async (ctx) => {
+      return {
+        card: await ctx.db.get(cardId),
+        scheduled: await ctx.db.system.query("_scheduled_functions").collect(),
+      }
+    })
+    expect(card?.status).toBe("scheduled")
+    expect(card?.failureReason).toBeUndefined()
+    expect(card?.zernioSubmissionKey).toBeTruthy()
+    expect(fetchMock).toHaveBeenCalled()
+    expect(fetchMock.mock.calls[0]?.[1]?.headers).toMatchObject({
+      "Idempotency-Key": card?.zernioSubmissionKey,
+    })
+    expect(scheduled).toHaveLength(1)
   })
 
   test("unhealthy assigned account can be replaced by another healthy active account", async () => {
@@ -704,7 +804,9 @@ describe("account health monitor helpers", () => {
       })
     })
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
-      data: { children: [{ data: { name: "t3_abc", score: 12, num_comments: 4 } }] },
+      id: "abc",
+      score: 12,
+      numComments: 4,
     }))))
 
     await t.action(internal.pipeline.healthMonitor.checkAccountHealth, {
@@ -718,7 +820,7 @@ describe("account health monitor helpers", () => {
     expect(posted?.replyCount).toBe(4)
   })
 
-  test("checkAccountHealth patches missing and removed things distinctly", async () => {
+  test("checkAccountHealth skips replies without URLs and patches removed replies", async () => {
     const t = convexTest(schema, modules)
     const { projectId } = await seedProject(t)
     const redditAccountId = await seedRedditAccount(t, projectId)
@@ -770,17 +872,18 @@ describe("account health monitor helpers", () => {
           visibility: "visible",
           lastCheckedAt: now,
           createdAt: now + 1,
+          permalink: "https://www.reddit.com/r/startups/comments/removed",
         }),
       }
     })
-    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input)
-      if (url.includes("t1_removed")) {
+    vi.stubGlobal("fetch", vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = typeof init?.body === "string" ? init.body : ""
+      if (body.includes("removed")) {
         return new Response(JSON.stringify({
-          data: { children: [{ data: { name: "t1_removed", body: "[removed]" } }] },
+          comments: [{ id: "removed", body: "[removed]" }],
         }))
       }
-      return new Response(JSON.stringify({ data: { children: [] } }))
+      return new Response(JSON.stringify({ comments: [] }))
     }))
 
     await t.action(internal.pipeline.healthMonitor.checkAccountHealth, {
@@ -792,7 +895,7 @@ describe("account health monitor helpers", () => {
       missing: await ctx.db.get(ids.missing),
       removed: await ctx.db.get(ids.removed),
     }))
-    expect(rows.missing?.visibility).toBe("shadow_hidden")
+    expect(rows.missing?.visibility).toBe("visible")
     expect(rows.removed?.visibility).toBe("removed")
   })
 

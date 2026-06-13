@@ -39,7 +39,13 @@ export const createDailyCards = internalMutation({
       .query("redditAccounts")
       .withIndex("by_projectId", (q) => q.eq("projectId", args.projectId))
       .take(50)
-    const activeAccounts = accounts.filter((account) => account.isActive)
+    const activeAccounts = accounts.filter(
+      (account) =>
+        account.isActive &&
+        account.healthStatus === "healthy" &&
+        account.providerCanPost !== false &&
+        account.providerNeedsReconnect !== true,
+    )
 
     if (activeAccounts.length === 0) {
       return { created: 0, skipped: true }

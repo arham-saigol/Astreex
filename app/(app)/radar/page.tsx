@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect, useCallback, useRef } from "react"
-import { useQuery, useMutation } from "convex/react"
+import { useAction, useQuery, useMutation } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import { toast } from "sonner"
@@ -42,7 +42,7 @@ function getErrorMessage(error: unknown) {
 // ---------- Types ----------
 
 type Subreddit = {
-  _id: Id<"subreddits">
+  _id: Id<"subreddits"> | string
   _creationTime: number
   name: string
   memberCount?: number
@@ -51,6 +51,7 @@ type Subreddit = {
   active: boolean
   addedBy: "agent" | "user"
   createdAt: number
+  pending?: boolean
 }
 
 type RadarStatus = {
@@ -142,7 +143,7 @@ function SubredditRow({
 
       {/* Toggle */}
       <div className="shrink-0 pl-3">
-        <Toggle checked={sub.active} onChange={onToggle} />
+        <Toggle checked={sub.active} onChange={onToggle} disabled={sub.pending} />
       </div>
     </button>
   )
@@ -271,10 +272,20 @@ function PanelContent({
   )
 }
 
-function AddSubredditInput({ onDone }: { onDone: () => void }) {
+function AddSubredditInput({
+  onDone,
+  onOptimisticAdd,
+  onOptimisticSuccess,
+  onOptimisticFailure,
+}: {
+  onDone: () => void
+  onOptimisticAdd: (subreddit: Subreddit) => void
+  onOptimisticSuccess: (tempId: string, subreddit: Subreddit) => void
+  onOptimisticFailure: (tempId: string) => void
+}) {
   const [value, setValue] = useState("")
   const [loading, setLoading] = useState(false)
-  const addSubreddit = useMutation(api.subreddits.addSubreddit)
+  const addSubreddit = useAction(api.subreddits.addSubreddit)
   const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -286,8 +297,36 @@ function AddSubredditInput({ onDone }: { onDone: () => void }) {
     if (!name || loading) return
 
     setLoading(true)
+    const cleanName = name.replace(/^r\//i, "").trim().toLowerCase()
+    const now = Date.now()
+    const tempId = `temp-${now}-${Math.random().toString(36).slice(2)}`
+    onOptimisticAdd({
+      _id: tempId,
+      _creationTime: now,
+      name: cleanName,
+      relevanceScore: 75,
+      reasoning: "Added by user",
+      active: true,
+      addedBy: "user",
+      createdAt: now,
+      pending: true,
+    })
+    setValue("")
+    onDone()
     try {
       const result = await addSubreddit({ name })
+      if (result) {
+        onOptimisticSuccess(tempId, {
+          _id: result.id,
+          _creationTime: now,
+          name: result.name,
+          relevanceScore: result.relevanceScore,
+          reasoning: "Added by user",
+          active: true,
+          addedBy: "user",
+          createdAt: now,
+        })
+      }
       if (result && result.relevanceScore < 40) {
         toast.warning(
           `r/${result.name} has low relevance (score: ${result.relevanceScore}/100). This may reduce recommendation quality.`
@@ -295,9 +334,8 @@ function AddSubredditInput({ onDone }: { onDone: () => void }) {
       } else if (result) {
         toast.success(`r/${result.name} added to your radar.`)
       }
-      setValue("")
-      onDone()
     } catch (err: unknown) {
+      onOptimisticFailure(tempId)
       const msg = getErrorMessage(err)
       if (msg.includes("DUPLICATE")) {
         toast.error("That subreddit is already on your radar.")
@@ -364,26 +402,25 @@ export default function RadarPage() {
   const radarStatus = useQuery(api.subreddits.getRadarStatus)
   const toggleSubreddit = useMutation(api.subreddits.toggleSubreddit)
 
-  const [selectedId, setSelectedId] = useState<Id<"subreddits"> | null>(null)
+  const [selectedId, setSelectedId] = useState<string | null>(null)
   const [showAddInput, setShowAddInput] = useState(false)
   const [optimisticToggles, setOptimisticToggles] = useState<
     Record<string, boolean>
   >({})
+  const [optimisticAdds, setOptimisticAdds] = useState<Subreddit[]>([])
 
-  const activeCount =
-    subreddits?.filter((s) => {
-      const opt = optimisticToggles[s._id]
-      return opt !== undefined ? opt : s.active
-    }).length ?? 0
-
-  const selectedSub = subreddits?.find((s) => s._id === selectedId) ?? null
+  const selectedSub =
+    [...(subreddits ?? []), ...optimisticAdds].find((s) => s._id === selectedId) ??
+    null
 
   const handleToggle = useCallback(
-    async (id: Id<"subreddits">, newActive: boolean) => {
+    async (id: Id<"subreddits"> | string, newActive: boolean) => {
+      if (String(id).startsWith("temp-")) return
+
       // Check minimum before optimistic update
       if (!newActive) {
         const currentActive =
-          subreddits?.filter((s) => {
+          subreddits?.filter((s: Subreddit) => {
             const opt = optimisticToggles[s._id]
             return opt !== undefined ? opt : s.active
           }).length ?? 0
@@ -400,7 +437,7 @@ export default function RadarPage() {
       setOptimisticToggles((prev) => ({ ...prev, [id]: newActive }))
 
       try {
-        await toggleSubreddit({ subredditId: id, active: newActive })
+        await toggleSubreddit({ subredditId: id as Id<"subreddits">, active: newActive })
       } catch (err: unknown) {
         // Revert optimistic update
         setOptimisticToggles((prev) => {
@@ -421,8 +458,17 @@ export default function RadarPage() {
   )
 
   // Apply optimistic toggles to render list
-  const displayList = subreddits
-    ?.map((s) => ({
+  const displayList = [
+    ...(subreddits ?? []),
+    ...optimisticAdds.filter(
+      (optimistic) =>
+        !(subreddits ?? []).some(
+          (subreddit: Subreddit) =>
+            subreddit._id === optimistic._id || subreddit.name === optimistic.name,
+        ),
+    ),
+  ]
+    .map((s) => ({
       ...s,
       active:
         optimisticToggles[s._id] !== undefined
@@ -433,6 +479,8 @@ export default function RadarPage() {
       if (a.active !== b.active) return a.active ? -1 : 1
       return b.relevanceScore - a.relevanceScore
     })
+
+  const activeCount = displayList.filter((s) => s.active).length
 
   // Loading state
   if (subreddits === undefined) {
@@ -460,7 +508,7 @@ export default function RadarPage() {
   }
 
   // Empty state
-  if (subreddits.length === 0 && !showAddInput) {
+  if (subreddits.length === 0 && optimisticAdds.length === 0 && !showAddInput) {
     return (
       <div className="space-y-6">
         <div className="flex items-center justify-between">
@@ -511,7 +559,23 @@ export default function RadarPage() {
 
       {/* Add input */}
       {showAddInput && (
-        <AddSubredditInput onDone={() => setShowAddInput(false)} />
+        <AddSubredditInput
+          onDone={() => setShowAddInput(false)}
+          onOptimisticAdd={(subreddit) =>
+            setOptimisticAdds((prev) => [subreddit, ...prev])
+          }
+          onOptimisticSuccess={(tempId, subreddit) => {
+            setOptimisticAdds((prev) =>
+              prev.map((item) => (item._id === tempId ? subreddit : item)),
+            )
+            setSelectedId((current) =>
+              current === tempId ? subreddit._id : current,
+            )
+          }}
+          onOptimisticFailure={(tempId) =>
+            setOptimisticAdds((prev) => prev.filter((item) => item._id !== tempId))
+          }
+        />
       )}
       <ManualSubredditNotice status={radarStatus} />
 

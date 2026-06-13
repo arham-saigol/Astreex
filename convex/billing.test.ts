@@ -15,12 +15,8 @@ afterEach(() => {
 
 function stubRequiredEnv() {
   vi.stubEnv("DEEPSEEK_API_KEY", "test")
-  vi.stubEnv("REDDIT_CLIENT_ID", "client")
-  vi.stubEnv("REDDIT_CLIENT_SECRET", "secret")
-  vi.stubEnv(
-    "REDDIT_TOKEN_ENCRYPTION_KEY",
-    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-  )
+  vi.stubEnv("ZERNIO_API_KEY", "zernio")
+  vi.stubEnv("FETCHLAYER_API_KEY", "fetchlayer")
 }
 
 beforeEach(() => {
@@ -91,9 +87,8 @@ async function seedActiveAccounts(
       await ctx.db.insert("redditAccounts", {
         projectId,
         redditUsername: `founder${index}`,
-        accessToken: "encrypted",
-        refreshToken: "encrypted",
-        tokenExpiresAt: Date.now() + 60_000,
+        zernioAccountId: `zernio_${index}`,
+        providerCanPost: true,
         isActive: true,
         healthStatus: index === count - 1 ? "warning" : "healthy",
         createdAt: Date.now() + index,
@@ -273,7 +268,7 @@ describe("starter enforcement", () => {
     })
 
     await expect(
-      t.withIdentity({ subject: "user_1" }).mutation(api.subreddits.addSubreddit, {
+      t.withIdentity({ subject: "user_1" }).action(api.subreddits.addSubreddit, {
         name: "targetsub",
       }),
     ).rejects.toThrow("DUPLICATE")
@@ -289,7 +284,7 @@ describe("starter enforcement", () => {
     await seedActiveSubreddits(t, projectId, 10)
 
     await expect(
-      t.withIdentity({ subject: "user_1" }).mutation(api.subreddits.addSubreddit, {
+      t.withIdentity({ subject: "user_1" }).action(api.subreddits.addSubreddit, {
         name: "founders",
       }),
     ).rejects.toThrow(
@@ -307,7 +302,7 @@ describe("starter enforcement", () => {
     await seedActiveAccounts(t, projectId, 1)
 
     const context = await t.withIdentity({ subject: "user_1" }).query(
-      api.reddit.getOAuthAuthorizationContext,
+      api.reddit.getConnectContext,
       { projectId },
     )
 

@@ -70,6 +70,7 @@ export default defineSchema({
     subredditDiscoveryStatus: v.optional(subredditDiscoveryStatus),
     timezone: v.string(),
     lastAnalyticsRefresh: v.optional(v.number()),
+    zernioProfileId: v.optional(v.string()),
     lastActiveAt: v.number(),
     createdAt: v.number(),
   })
@@ -92,21 +93,27 @@ export default defineSchema({
   redditAccounts: defineTable({
     projectId: v.id("projects"),
     redditUsername: v.string(),
-    accessToken: v.string(),
-    refreshToken: v.string(),
-    tokenExpiresAt: v.number(),
+    zernioAccountId: v.string(),
     isActive: v.boolean(),
     healthStatus: redditHealthStatus,
     lastCheckedAt: v.optional(v.number()),
+    providerHealthStatus: v.optional(v.string()),
+    providerCanPost: v.optional(v.boolean()),
+    providerNeedsReconnect: v.optional(v.boolean()),
+    providerIssues: v.optional(v.array(v.string())),
+    providerLastCheckedAt: v.optional(v.number()),
     createdAt: v.number(),
   })
     .index("by_projectId", ["projectId"])
-    .index("by_projectId_and_redditUsername", ["projectId", "redditUsername"]),
+    .index("by_projectId_and_redditUsername", ["projectId", "redditUsername"])
+    .index("by_projectId_and_zernioAccountId", ["projectId", "zernioAccountId"]),
 
   subreddits: defineTable({
     projectId: v.id("projects"),
     name: v.string(),
     memberCount: v.optional(v.number()),
+    description: v.optional(v.string()),
+    rulesJson: v.optional(v.string()),
     relevanceScore: v.number(),
     reasoning: v.string(),
     active: v.boolean(),
@@ -122,6 +129,7 @@ export default defineSchema({
     posts: v.array(
       v.object({
         id: v.string(),
+        redditThingId: v.optional(v.string()),
         title: v.string(),
         selftext: v.optional(v.string()),
         permalink: v.optional(v.string()),
@@ -140,6 +148,7 @@ export default defineSchema({
   surfacedPosts: defineTable({
     projectId: v.id("projects"),
     redditPostId: v.string(),
+    redditThingId: v.optional(v.string()),
     subreddit: v.string(),
     title: v.string(),
     selftext: v.optional(v.string()),
@@ -168,6 +177,8 @@ export default defineSchema({
     failureReason: v.optional(v.string()),
     postRetryCount: v.optional(v.number()),
     lastPostAttemptAt: v.optional(v.number()),
+    zernioSubmissionKey: v.optional(v.string()),
+    zernioSubmissionAccountId: v.optional(v.id("redditAccounts")),
     pipelineRunId: v.optional(v.id("pipelineRuns")),
     draftKey: v.optional(v.string()),
     createdAt: v.number(),
@@ -190,6 +201,7 @@ export default defineSchema({
     redditAccountId: v.optional(v.id("redditAccounts")),
     redditId: v.string(),
     redditThingId: v.optional(v.string()),
+    zernioPostId: v.optional(v.string()),
     subreddit: v.string(),
     type: v.optional(cardType),
     permalink: v.optional(v.string()),
@@ -230,12 +242,16 @@ export default defineSchema({
       "status",
     ]),
 
-  rateLimitLog: defineTable({
-    service: v.literal("reddit"),
-    priority: v.union(v.literal(1), v.literal(2), v.literal(3)),
+  providerRequestLog: defineTable({
+    provider: v.union(v.literal("zernio"), v.literal("fetchlayer")),
+    endpoint: v.string(),
+    status: v.optional(v.number()),
+    ok: v.boolean(),
+    durationMs: v.number(),
+    error: v.optional(v.string()),
     requestedAt: v.number(),
     createdAt: v.number(),
-  }).index("by_service_and_requestedAt", ["service", "requestedAt"]),
+  }).index("by_provider_and_requestedAt", ["provider", "requestedAt"]),
 
   pipelineRuns: defineTable({
     projectId: v.id("projects"),
