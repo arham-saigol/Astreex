@@ -12,6 +12,15 @@ import { getPlanLimits } from "./lib/planLimits"
 
 const profileJsonValidator = v.string()
 
+function trackedCompetitorCount(profileJson: string) {
+  const parsed = JSON.parse(profileJson) as Record<string, unknown>
+  const competitors = parsed.competitors
+
+  if (!Array.isArray(competitors)) return 0
+
+  return competitors.map((item) => String(item).trim()).filter(Boolean).length
+}
+
 async function getCurrentUser(ctx: QueryCtx | MutationCtx) {
   const identity = await ctx.auth.getUserIdentity()
   if (!identity) throw new Error("Not authenticated")
@@ -212,9 +221,13 @@ export const updateBrandProfile = mutation({
     profileJson: profileJsonValidator,
   },
   handler: async (ctx, args) => {
-    await getOwnedProject(ctx, args.projectId)
+    const project = await getOwnedProject(ctx, args.projectId)
 
-    JSON.parse(args.profileJson)
+    const competitorCount = trackedCompetitorCount(args.profileJson)
+    const competitorLimit = getPlanLimits(project.plan).maxCompetitors
+    if (competitorCount > competitorLimit) {
+      throw new Error(`Your plan supports up to ${competitorLimit} tracked competitors`)
+    }
 
     const brand = await ctx.db
       .query("brands")

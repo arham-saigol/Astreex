@@ -80,6 +80,7 @@ type SettingsContext = {
     limits: {
       cardsPerDay: number
       maxSubreddits: number
+      maxCompetitors: number
       maxRedditAccounts: number
     }
   }
@@ -116,6 +117,7 @@ const plans: Array<{
   price: number
   cardsPerDay: string
   subreddits: string
+  competitors: string
   accounts: number
   features: string[]
   recommended?: boolean
@@ -125,28 +127,31 @@ const plans: Array<{
     name: "Starter",
     price: 29,
     cardsPerDay: "5 cards/day",
-    subreddits: "10 subreddits",
+    subreddits: "5 subreddits",
+    competitors: "3 competitors",
     accounts: 1,
-    features: ["5 cards per day", "10 subreddits monitored", "1 Reddit account", "Basic analytics"],
+    features: ["150 cards/month (5/day)", "5 active subreddits", "3 tracked competitors", "1 Reddit account", "Basic analytics dashboard", "Daily health monitoring"],
   },
   {
     id: "growth",
     name: "Growth",
-    price: 49,
+    price: 59,
     cardsPerDay: "15 cards/day",
-    subreddits: "25 subreddits",
-    accounts: 3,
+    subreddits: "15 subreddits",
+    competitors: "5 competitors",
+    accounts: 2,
     recommended: true,
-    features: ["15 cards per day", "25 subreddits monitored", "3 Reddit accounts", "Full analytics"],
+    features: ["450 cards/month (15/day)", "15 active subreddits", "5 tracked competitors", "2 Reddit accounts", "Advanced analytics dashboard", "Daily health monitoring"],
   },
   {
     id: "scale",
     name: "Scale",
-    price: 99,
-    cardsPerDay: "35 cards/day",
-    subreddits: "50 subreddits",
+    price: 119,
+    cardsPerDay: "40 cards/day",
+    subreddits: "25 subreddits",
+    competitors: "10 competitors",
     accounts: 5,
-    features: ["35 cards per day", "50 subreddits monitored", "5 Reddit accounts", "Full analytics + export"],
+    features: ["1200 cards/month (40/day)", "25 active subreddits", "10 tracked competitors", "5 Reddit accounts", "Advanced analytics dashboard", "Daily health monitoring"],
   },
 ]
 
@@ -974,6 +979,7 @@ function BillingTab({
             <div className="grid gap-2 text-[13px] text-text-secondary sm:text-right">
               <span>{context.project.limits.cardsPerDay} cards/day</span>
               <span>{context.project.limits.maxSubreddits} subreddits</span>
+              <span>{context.project.limits.maxCompetitors} tracked competitors</span>
               <span>{context.project.limits.maxRedditAccounts} Reddit accounts</span>
             </div>
           </div>

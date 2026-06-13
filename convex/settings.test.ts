@@ -25,6 +25,7 @@ afterEach(() => {
 async function seedSettingsProject(
   t: ReturnType<typeof convexTest>,
   overrides: Partial<{
+    plan: "starter" | "growth" | "scale"
     planStatus: "trialing" | "active" | "canceled" | "past_due" | "trial_expired"
     creemCustomerId: string
   }> = {},
@@ -38,7 +39,7 @@ async function seedSettingsProject(
     const projectId = await ctx.db.insert("projects", {
       userId,
       name: "Astreex",
-      plan: "growth",
+      plan: overrides.plan ?? "growth",
       planStatus: overrides.planStatus ?? "active",
       creemCustomerId: overrides.creemCustomerId,
       onboardingStatus: "complete",
@@ -59,6 +60,21 @@ async function seedSettingsProject(
 }
 
 describe("settings mutations", () => {
+  test("updateBrandProfile enforces tracked competitor limits", async () => {
+    const t = convexTest(schema, modules)
+    const { projectId } = await seedSettingsProject(t, { plan: "starter" })
+
+    await expect(
+      t.withIdentity({ subject: "user_1" }).mutation(api.settings.updateBrandProfile, {
+        projectId,
+        profileJson: JSON.stringify({
+          name: "Astreex",
+          competitors: ["A", "B", "C", "D"],
+        }),
+      }),
+    ).rejects.toThrow("Your plan supports up to 3 tracked competitors")
+  })
+
   test("reanalyzeBrandProfile resets profile and queues onboarding pipeline", async () => {
     const t = convexTest(schema, modules)
     const { projectId, brandId } = await seedSettingsProject(t)

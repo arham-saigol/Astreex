@@ -2,6 +2,7 @@ import { v } from "convex/values"
 import { internal } from "./_generated/api"
 import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server"
 import type { Doc, Id } from "./_generated/dataModel"
+import { getPlanLimits } from "./lib/planLimits"
 
 type Plan = "starter" | "growth" | "scale"
 
@@ -58,9 +59,7 @@ function isCompleteProject(project: Doc<"projects">) {
 }
 
 function planAccountLimit(plan: Plan) {
-  if (plan === "starter") return 1
-  if (plan === "growth") return 3
-  return 5
+  return getPlanLimits(plan).maxRedditAccounts
 }
 
 type PrepareProjectArgs = {

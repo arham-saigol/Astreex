@@ -7,6 +7,7 @@ export type PipelineLimits = {
   minOriginals: number
   filterTop: number
   monitoredSubreddits: number
+  trackedCompetitors: number
   redditAccounts: number
 }
 
@@ -17,7 +18,8 @@ const LIMITS: Record<Plan, PipelineLimits> = {
     originalDrafts: 1,
     minOriginals: 1,
     filterTop: 20,
-    monitoredSubreddits: 10,
+    monitoredSubreddits: 5,
+    trackedCompetitors: 3,
     redditAccounts: 1,
   },
   growth: {
@@ -26,16 +28,18 @@ const LIMITS: Record<Plan, PipelineLimits> = {
     originalDrafts: 2,
     minOriginals: 2,
     filterTop: 60,
-    monitoredSubreddits: 25,
-    redditAccounts: 3,
+    monitoredSubreddits: 15,
+    trackedCompetitors: 5,
+    redditAccounts: 2,
   },
   scale: {
-    cardsPerDay: 35,
-    replyDrafts: 35,
+    cardsPerDay: 40,
+    replyDrafts: 40,
     originalDrafts: 5,
     minOriginals: 3,
     filterTop: 120,
-    monitoredSubreddits: 50,
+    monitoredSubreddits: 25,
+    trackedCompetitors: 10,
     redditAccounts: 5,
   },
 }
@@ -52,6 +56,7 @@ export function getPlanLimits(plan: string) {
   return {
     cardsPerDay: limits.cardsPerDay,
     maxSubreddits: limits.monitoredSubreddits,
+    maxCompetitors: limits.trackedCompetitors,
     maxRedditAccounts: limits.redditAccounts,
   }
 }
@@ -59,12 +64,12 @@ export function getPlanLimits(plan: string) {
 export function getSubredditDiscoveryLimits(plan: string) {
   switch (plan) {
     case "starter":
-      return { discoverCount: 15, activeCount: 10 }
+      return { discoverCount: 10, activeCount: 5 }
     case "growth":
-      return { discoverCount: 30, activeCount: 25 }
+      return { discoverCount: 20, activeCount: 15 }
     case "scale":
-      return { discoverCount: 50, activeCount: 45 }
+      return { discoverCount: 30, activeCount: 25 }
     default:
-      return { discoverCount: 15, activeCount: 10 }
+      return { discoverCount: 10, activeCount: 5 }
   }
 }

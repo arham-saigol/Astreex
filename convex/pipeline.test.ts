@@ -103,17 +103,20 @@ describe("pipeline helpers", () => {
   test("plan limits match app sizing", () => {
     expect(getPipelineLimits("starter")).toMatchObject({
       cardsPerDay: 5,
-      monitoredSubreddits: 10,
+      monitoredSubreddits: 5,
+      trackedCompetitors: 3,
       redditAccounts: 1,
     })
     expect(getPipelineLimits("growth")).toMatchObject({
       cardsPerDay: 15,
-      monitoredSubreddits: 25,
-      redditAccounts: 3,
+      monitoredSubreddits: 15,
+      trackedCompetitors: 5,
+      redditAccounts: 2,
     })
     expect(getPipelineLimits("scale")).toMatchObject({
-      cardsPerDay: 35,
-      monitoredSubreddits: 50,
+      cardsPerDay: 40,
+      monitoredSubreddits: 25,
+      trackedCompetitors: 10,
       redditAccounts: 5,
     })
   })
