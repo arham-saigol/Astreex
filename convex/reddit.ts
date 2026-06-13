@@ -11,6 +11,7 @@ import type { Id } from "./_generated/dataModel"
 import { getPlanLimits } from "./lib/planLimits"
 import {
   createZernioProfile,
+  deleteZernioProfile,
   getAccountDetails,
   getAccountHealth,
   normalizeAccountHealth,
@@ -141,11 +142,18 @@ export const ensureZernioProfileForConnect = action({
 
     let zernioProfileId = context.zernioProfileId ?? undefined
     if (!zernioProfileId) {
-      zernioProfileId = await createZernioProfile(ctx, context.projectName)
-      await ctx.runMutation(internal.reddit.saveZernioProfileId, {
-        projectId: args.projectId,
-        zernioProfileId,
-      })
+      const createdZernioProfileId = await createZernioProfile(ctx, context.projectName)
+      const canonicalZernioProfileId: string = await ctx.runMutation(
+        internal.reddit.saveZernioProfileId,
+        {
+          projectId: args.projectId,
+          zernioProfileId: createdZernioProfileId,
+        },
+      )
+      if (canonicalZernioProfileId !== createdZernioProfileId) {
+        await deleteZernioProfile(ctx, createdZernioProfileId)
+      }
+      zernioProfileId = canonicalZernioProfileId
     }
 
     return { ...context, zernioProfileId }
@@ -173,7 +181,9 @@ export const completeZernioAccountConnect = action({
       throw new Error("Invalid Zernio profile")
     }
 
-    const account = await getAccountDetails(ctx, args.zernioAccountId)
+    const accountPromise = getAccountDetails(ctx, args.zernioAccountId)
+    const healthPromise = getAccountHealth(ctx, args.zernioAccountId)
+    const account = await accountPromise
     const authoritativeAccountId = zernioAccountId(account)
     const authoritativeProfileId = zernioAccountProfileId(account)
     const redditUsername = zernioAccountUsername(account)
@@ -182,12 +192,11 @@ export const completeZernioAccountConnect = action({
       authoritativeProfileId !== args.zernioProfileId ||
       !redditUsername
     ) {
+      void healthPromise.catch(() => null)
       throw new Error("Unauthorized Zernio account")
     }
 
-    const providerHealth = normalizeAccountHealth(
-      await getAccountHealth(ctx, args.zernioAccountId),
-    )
+    const providerHealth = normalizeAccountHealth(await healthPromise)
     return await ctx.runMutation(internal.reddit.upsertZernioAccount, {
       projectId: args.projectId,
       redditUsername,
@@ -205,18 +214,19 @@ export const saveZernioProfileId = internalMutation({
     projectId: v.id("projects"),
     zernioProfileId: v.string(),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<string> => {
     await getOwnedProject(ctx, args.projectId)
 
     const project = await ctx.db.get(args.projectId)
-    if (project?.zernioProfileId && project.zernioProfileId !== args.zernioProfileId) {
-      throw new Error("Zernio profile is already set")
+    if (project?.zernioProfileId) {
+      return project.zernioProfileId
     }
 
     await ctx.db.patch(args.projectId, {
       zernioProfileId: args.zernioProfileId,
       lastActiveAt: Date.now(),
     })
+    return args.zernioProfileId
   },
 })
 

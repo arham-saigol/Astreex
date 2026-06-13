@@ -55,6 +55,7 @@ export async function GET(request: NextRequest) {
   }
 
   if (
+    !isSyntacticallyValidProjectId(cookieProjectId) ||
     connected !== "reddit" ||
     profileId !== cookieProfileId ||
     state !== cookieState ||
@@ -63,6 +64,7 @@ export async function GET(request: NextRequest) {
   ) {
     return badRequest(request, returnTo, "Invalid Zernio callback")
   }
+  const projectId = cookieProjectId as Id<"projects">
 
   const { client, response: authResponse } = await getAuthedConvexClient(request)
   if (!client) {
@@ -72,7 +74,7 @@ export async function GET(request: NextRequest) {
 
   try {
     const context = await client.query(api.reddit.getConnectContext, {
-      projectId: cookieProjectId as Id<"projects">,
+      projectId,
     })
     if (!context.canAddAccount) {
       throw new Error(context.message ?? "Reddit account limit reached for this plan")
@@ -91,7 +93,7 @@ export async function GET(request: NextRequest) {
     }
 
     await client.action(api.reddit.completeZernioAccountConnect, {
-      projectId: cookieProjectId as Id<"projects">,
+      projectId,
       zernioAccountId: accountId,
       zernioProfileId: cookieProfileId,
     })
@@ -111,4 +113,8 @@ export async function GET(request: NextRequest) {
 
 function isSyntacticallyValidZernioId(value: string) {
   return /^[A-Za-z0-9_-]{3,128}$/.test(value)
+}
+
+function isSyntacticallyValidProjectId(value: string) {
+  return /^[A-Za-z0-9]{16,64}$/.test(value)
 }

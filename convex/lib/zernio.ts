@@ -124,6 +124,12 @@ export async function createZernioProfile(ctx: ActionCtx, name: string) {
   return profileId
 }
 
+export async function deleteZernioProfile(ctx: ActionCtx, profileId: string) {
+  await zernioJson<unknown>(ctx, `/profiles/${encodeURIComponent(profileId)}`, {
+    method: "DELETE",
+  })
+}
+
 export async function getAccountDetails(ctx: ActionCtx, accountId: string) {
   return await zernioJson<ZernioAccountDetails>(
     ctx,
@@ -132,7 +138,7 @@ export async function getAccountDetails(ctx: ActionCtx, accountId: string) {
 }
 
 function accountDetailsBody(account: ZernioAccountDetails): ZernioAccountDetails {
-  return account.account ?? account
+  return account.account ? { ...account.account, ...account } : account
 }
 
 export function zernioAccountId(account: ZernioAccountDetails) {
@@ -188,10 +194,14 @@ export async function createRedditPost(
     subreddit: string
     title: string
     content: string
+    idempotencyKey?: string
   },
 ) {
   return await zernioJson<ZernioPostResponse>(ctx, "/posts", {
     method: "POST",
+    headers: args.idempotencyKey
+      ? { "Idempotency-Key": args.idempotencyKey }
+      : undefined,
     body: JSON.stringify({
       content: args.content,
       publishNow: true,
@@ -222,6 +232,7 @@ export async function replyToInboxPost(
     accountId: string
     postId: string
     message: string
+    idempotencyKey?: string
   },
 ) {
   return await zernioJson<ZernioCommentResponse>(
@@ -229,6 +240,9 @@ export async function replyToInboxPost(
     `/inbox/comments/${encodeURIComponent(args.postId)}`,
     {
       method: "POST",
+      headers: args.idempotencyKey
+        ? { "Idempotency-Key": args.idempotencyKey }
+        : undefined,
       body: JSON.stringify({
         accountId: args.accountId,
         message: args.message,

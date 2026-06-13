@@ -54,9 +54,11 @@ function stringifySanitizedRules(
 
 export function stringifyRulesJson(rules: unknown) {
   const json = stringifySanitizedRules(rules, 300, 20, 20)
+  if (typeof json !== "string") return ""
   if (json.length <= MAX_RULES_JSON_LENGTH) return json
 
   const compactJson = stringifySanitizedRules(rules, 100, 10, 10)
+  if (typeof compactJson !== "string") return ""
   if (compactJson.length <= MAX_RULES_JSON_LENGTH) return compactJson
 
   return JSON.stringify({ truncated: true })

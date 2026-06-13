@@ -177,6 +177,8 @@ export default defineSchema({
     failureReason: v.optional(v.string()),
     postRetryCount: v.optional(v.number()),
     lastPostAttemptAt: v.optional(v.number()),
+    zernioSubmissionKey: v.optional(v.string()),
+    zernioSubmissionAccountId: v.optional(v.id("redditAccounts")),
     pipelineRunId: v.optional(v.id("pipelineRuns")),
     draftKey: v.optional(v.string()),
     createdAt: v.number(),

@@ -564,11 +564,14 @@ export default function RadarPage() {
           onOptimisticAdd={(subreddit) =>
             setOptimisticAdds((prev) => [subreddit, ...prev])
           }
-          onOptimisticSuccess={(tempId, subreddit) =>
+          onOptimisticSuccess={(tempId, subreddit) => {
             setOptimisticAdds((prev) =>
               prev.map((item) => (item._id === tempId ? subreddit : item)),
             )
-          }
+            setSelectedId((current) =>
+              current === tempId ? subreddit._id : current,
+            )
+          }}
           onOptimisticFailure={(tempId) =>
             setOptimisticAdds((prev) => prev.filter((item) => item._id !== tempId))
           }

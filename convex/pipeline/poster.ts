@@ -128,6 +128,7 @@ async function submitToZernio(
   account: AccountContext,
   card: Doc<"cards">,
   surfacedPost: Doc<"surfacedPosts"> | null,
+  idempotencyKey: string,
 ): Promise<SubmitResult> {
   const content = contentForCard(card)
 
@@ -141,6 +142,7 @@ async function submitToZernio(
       accountId: account.zernioAccountId,
       postId: parentThingId,
       message: content,
+      idempotencyKey,
     }))
     if (!result.redditId) {
       throw new Error("Zernio response did not include created comment")
@@ -157,6 +159,7 @@ async function submitToZernio(
     subreddit: card.targetSubreddit,
     title,
     content: body,
+    idempotencyKey,
   }))
   if (isTerminalFailure(result.status) || isTerminalFailure(result.platformStatus)) {
     throw new Error(result.error ?? "Zernio post failed")
@@ -235,21 +238,27 @@ export const postToReddit = internalAction({
         cardId: args.cardId,
         retryAttempt,
       })
+      const submission: { idempotencyKey: string } = await ctx.runMutation(
+        internal.pipeline.poster.ensureZernioSubmission,
+        {
+          cardId: args.cardId,
+          redditAccountId: account._id,
+        },
+      )
 
       const result = await submitToZernio(
         ctx,
         account,
         context.card,
         context.surfacedPost,
+        submission.idempotencyKey,
       )
 
       if (
         context.card.type === "original" &&
         result.zernioPostId &&
         (!result.redditId ||
-          (!isPublished(result.status) &&
-            !isPublished(result.platformStatus) &&
-            result.status !== undefined))
+          (!isPublished(result.status) && !isPublished(result.platformStatus)))
       ) {
         await ctx.scheduler.runAfter(
           statusPollMs,
@@ -483,6 +492,30 @@ export const markPostAttempt = internalMutation({
       lastPostAttemptAt: Date.now(),
       ...(args.failureReason !== undefined ? { failureReason: args.failureReason } : {}),
     })
+  },
+})
+
+export const ensureZernioSubmission = internalMutation({
+  args: {
+    cardId: v.id("cards"),
+    redditAccountId: v.id("redditAccounts"),
+  },
+  handler: async (ctx, args): Promise<{ idempotencyKey: string }> => {
+    const card = await ctx.db.get(args.cardId)
+    if (!card) throw new Error("Card not found")
+    if (
+      card.zernioSubmissionKey &&
+      card.zernioSubmissionAccountId === args.redditAccountId
+    ) {
+      return { idempotencyKey: card.zernioSubmissionKey }
+    }
+
+    const idempotencyKey = `astreex:${args.cardId}:${args.redditAccountId}`
+    await ctx.db.patch(args.cardId, {
+      zernioSubmissionKey: idempotencyKey,
+      zernioSubmissionAccountId: args.redditAccountId,
+    })
+    return { idempotencyKey }
   },
 })
 
