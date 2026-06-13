@@ -23,12 +23,15 @@ const discoveredSubredditValidator = v.object({
 })
 
 function capTrackedCompetitors(profileJson: string, maxCompetitors: number) {
-  const parsed = JSON.parse(profileJson) as Record<string, unknown>
-  if (!Array.isArray(parsed.competitors)) return profileJson
+  const parsed = JSON.parse(profileJson) as unknown
+  if (typeof parsed !== "object" || parsed === null) return profileJson
+
+  const competitors = (parsed as Record<string, unknown>).competitors
+  if (!Array.isArray(competitors)) return profileJson
 
   return JSON.stringify({
     ...parsed,
-    competitors: parsed.competitors.slice(0, maxCompetitors),
+    competitors: competitors.slice(0, maxCompetitors),
   })
 }
 

@@ -115,10 +115,6 @@ const plans: Array<{
   id: Plan
   name: string
   price: number
-  cardsPerDay: string
-  subreddits: string
-  competitors: string
-  accounts: number
   features: string[]
   recommended?: boolean
 }> = [
@@ -126,20 +122,12 @@ const plans: Array<{
     id: "starter",
     name: "Starter",
     price: 29,
-    cardsPerDay: "5 cards/day",
-    subreddits: "5 subreddits",
-    competitors: "3 competitors",
-    accounts: 1,
     features: ["150 cards/month (5/day)", "5 active subreddits", "3 tracked competitors", "1 Reddit account", "Basic analytics dashboard", "Daily health monitoring"],
   },
   {
     id: "growth",
     name: "Growth",
     price: 59,
-    cardsPerDay: "15 cards/day",
-    subreddits: "15 subreddits",
-    competitors: "5 competitors",
-    accounts: 2,
     recommended: true,
     features: ["450 cards/month (15/day)", "15 active subreddits", "5 tracked competitors", "2 Reddit accounts", "Advanced analytics dashboard", "Daily health monitoring"],
   },
@@ -147,10 +135,6 @@ const plans: Array<{
     id: "scale",
     name: "Scale",
     price: 119,
-    cardsPerDay: "40 cards/day",
-    subreddits: "25 subreddits",
-    competitors: "10 competitors",
-    accounts: 5,
     features: ["1200 cards/month (40/day)", "25 active subreddits", "10 tracked competitors", "5 Reddit accounts", "Advanced analytics dashboard", "Daily health monitoring"],
   },
 ]

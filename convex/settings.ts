@@ -13,8 +13,10 @@ import { getPlanLimits } from "./lib/planLimits"
 const profileJsonValidator = v.string()
 
 function trackedCompetitorCount(profileJson: string) {
-  const parsed = JSON.parse(profileJson) as Record<string, unknown>
-  const competitors = parsed.competitors
+  const parsed = JSON.parse(profileJson) as unknown
+  if (typeof parsed !== "object" || parsed === null) return 0
+
+  const competitors = (parsed as Record<string, unknown>).competitors
 
   if (!Array.isArray(competitors)) return 0
 
