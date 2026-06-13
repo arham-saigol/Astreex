@@ -23,7 +23,10 @@ afterEach(() => {
   vi.unstubAllEnvs()
 })
 
-async function seedPipelineProject(t: ReturnType<typeof convexTest>) {
+async function seedPipelineProject(
+  t: ReturnType<typeof convexTest>,
+  plan: "starter" | "growth" | "scale" = "scale",
+) {
   return await t.run(async (ctx) => {
     const userId = await ctx.db.insert("users", {
       clerkId: "user_1",
@@ -33,7 +36,7 @@ async function seedPipelineProject(t: ReturnType<typeof convexTest>) {
     const projectId = await ctx.db.insert("projects", {
       userId,
       name: "Astreex",
-      plan: "scale",
+      plan,
       planStatus: "trialing",
       onboardingStatus: "running",
       timezone: "America/New_York",
@@ -55,16 +58,16 @@ async function seedPipelineProject(t: ReturnType<typeof convexTest>) {
 describe("onboarding pipeline helpers", () => {
   test("subreddit discovery limits match onboarding sizing", () => {
     expect(getSubredditDiscoveryLimits("starter")).toEqual({
-      discoverCount: 15,
-      activeCount: 10,
+      discoverCount: 10,
+      activeCount: 5,
     })
     expect(getSubredditDiscoveryLimits("growth")).toEqual({
-      discoverCount: 30,
-      activeCount: 25,
+      discoverCount: 20,
+      activeCount: 15,
     })
     expect(getSubredditDiscoveryLimits("scale")).toEqual({
-      discoverCount: 50,
-      activeCount: 45,
+      discoverCount: 30,
+      activeCount: 25,
     })
   })
 
@@ -74,12 +77,12 @@ describe("onboarding pipeline helpers", () => {
 
     await t.mutation(internal.onboarding.data.seedDiscoveredSubreddits, {
       projectId,
-      subreddits: Array.from({ length: 50 }, (_, index) => ({
+      subreddits: Array.from({ length: 30 }, (_, index) => ({
         name: `subreddit_${index}`,
         memberCount: 20_000 + index,
         relevanceScore: 90 - index,
         reasoning: `Reason ${index}`,
-        active: index < 45,
+        active: index < 25,
       })),
     })
 
@@ -87,12 +90,33 @@ describe("onboarding pipeline helpers", () => {
       return await ctx.db
         .query("subreddits")
         .withIndex("by_projectId", (q) => q.eq("projectId", projectId))
-        .take(60)
+        .take(40)
     })
 
-    expect(rows).toHaveLength(50)
+    expect(rows).toHaveLength(30)
     expect(rows.every((row) => row.addedBy === "agent")).toBe(true)
-    expect(rows.filter((row) => row.active)).toHaveLength(45)
+    expect(rows.filter((row) => row.active)).toHaveLength(25)
+  })
+
+  test("saveBrandProfile caps generated competitors to the plan limit", async () => {
+    const t = convexTest(schema, modules)
+    const { projectId, brandId } = await seedPipelineProject(t, "starter")
+
+    await t.mutation(internal.onboarding.data.saveBrandProfile, {
+      projectId,
+      profileJson: JSON.stringify({
+        name: "Astreex",
+        competitors: ["A", "B", "C", "D"],
+      }),
+      scrapeStatus: "complete",
+    })
+
+    const brand = await t.run(async (ctx) => await ctx.db.get(brandId))
+    const profile = JSON.parse(brand?.profileJson ?? "{}") as {
+      competitors?: string[]
+    }
+
+    expect(profile.competitors).toEqual(["A", "B", "C"])
   })
 
   test("onboarding status mutations patch running complete and error states", async () => {

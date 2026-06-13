@@ -101,17 +101,20 @@ describe("billing limits", () => {
   test("getPlanLimits returns user-facing limits", () => {
     expect(getPlanLimits("starter")).toEqual({
       cardsPerDay: 5,
-      maxSubreddits: 10,
+      maxSubreddits: 5,
+      maxCompetitors: 3,
       maxRedditAccounts: 1,
     })
     expect(getPlanLimits("growth")).toEqual({
       cardsPerDay: 15,
-      maxSubreddits: 25,
-      maxRedditAccounts: 3,
+      maxSubreddits: 15,
+      maxCompetitors: 5,
+      maxRedditAccounts: 2,
     })
     expect(getPlanLimits("scale")).toEqual({
-      cardsPerDay: 35,
-      maxSubreddits: 50,
+      cardsPerDay: 40,
+      maxSubreddits: 25,
+      maxCompetitors: 10,
       maxRedditAccounts: 5,
     })
   })
@@ -231,7 +234,7 @@ describe("Creem webhook handling", () => {
         .take(10),
     }))
 
-    expect(rows.subreddits.filter((row) => row.active)).toHaveLength(10)
+    expect(rows.subreddits.filter((row) => row.active)).toHaveLength(5)
     expect(rows.accounts.filter((row) => row.isActive)).toHaveLength(1)
   })
 })
@@ -274,14 +277,14 @@ describe("starter enforcement", () => {
     ).rejects.toThrow("DUPLICATE")
   })
 
-  test("starter cannot add an 11th active subreddit", async () => {
+  test("starter cannot add a 6th active subreddit", async () => {
     stubRequiredEnv()
     const t = convexTest(schema, modules)
     const { projectId } = await seedBillingProject(t, {
       plan: "starter",
       planStatus: "active",
     })
-    await seedActiveSubreddits(t, projectId, 10)
+    await seedActiveSubreddits(t, projectId, 5)
 
     await expect(
       t.withIdentity({ subject: "user_1" }).action(api.subreddits.addSubreddit, {

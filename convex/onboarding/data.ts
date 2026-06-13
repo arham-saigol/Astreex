@@ -1,5 +1,6 @@
 import { v } from "convex/values"
 import { internalMutation, internalQuery } from "../_generated/server"
+import { getPlanLimits } from "../lib/planLimits"
 
 const scrapeStatusValidator = v.union(
   v.literal("complete"),
@@ -20,6 +21,19 @@ const discoveredSubredditValidator = v.object({
   reasoning: v.string(),
   active: v.boolean(),
 })
+
+function capTrackedCompetitors(profileJson: string, maxCompetitors: number) {
+  const parsed = JSON.parse(profileJson) as unknown
+  if (typeof parsed !== "object" || parsed === null) return profileJson
+
+  const competitors = (parsed as Record<string, unknown>).competitors
+  if (!Array.isArray(competitors)) return profileJson
+
+  return JSON.stringify({
+    ...parsed,
+    competitors: competitors.slice(0, maxCompetitors),
+  })
+}
 
 export const loadPipelineProject = internalQuery({
   args: {
@@ -103,14 +117,21 @@ export const saveBrandProfile = internalMutation({
     scrapeStatus: scrapeStatusValidator,
   },
   handler: async (ctx, args) => {
+    const project = await ctx.db.get(args.projectId)
+    if (!project) throw new Error("Project not found")
+
     const brand = await ctx.db
       .query("brands")
       .withIndex("by_projectId", (q) => q.eq("projectId", args.projectId))
       .first()
     if (!brand) throw new Error("Brand not found")
+    const profileJson = capTrackedCompetitors(
+      args.profileJson,
+      getPlanLimits(project.plan).maxCompetitors,
+    )
 
     await ctx.db.patch(brand._id, {
-      profileJson: args.profileJson,
+      profileJson,
       scrapeStatus: args.scrapeStatus,
       updatedAt: Date.now(),
     })
