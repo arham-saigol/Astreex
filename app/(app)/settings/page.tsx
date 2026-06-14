@@ -39,15 +39,21 @@ type PlanStatus = "trialing" | "active" | "canceled" | "past_due" | "trial_expir
 type HealthStatus = "healthy" | "warning" | "banned"
 type OnboardingStatus = "in_progress" | "running" | "complete" | "error"
 
-type BrandProfile = {
-  name: string
-  tagline: string
-  description: string
-  targetAudience: string[]
-  painPointsSolved: string[]
-  keyFeatures: string[]
-  tone: string
-  competitors: string[]
+type ProjectIntelligenceProfile = {
+  overview: string
+  capabilities: string[]
+  icps: string[]
+  personas: string[]
+  painPoints: string[]
+  pricingAndCompetitorComparisons: string[]
+  whereProjectLeads: string[]
+  whereCompetitorsLead: string[]
+  weaknesses: string[]
+  futureAdvantages: string[]
+  positioning: string
+  redditUsefulAngles: string[]
+  avoidTopics: string[]
+  agentNotes: string[]
 }
 
 type RedditAccount = {
@@ -85,10 +91,10 @@ type SettingsContext = {
     }
   }
   brand: {
-    _id: Id<"brands">
+    _id: Id<"projectIntelligenceProfiles">
     websiteUrl: string
-    competitorUrl: string
-    profileJson: string
+    competitorUrls: string[]
+    intelligenceJson: string
     scrapeStatus: "complete" | "degraded" | null
   } | null
   redditAccounts: RedditAccount[]
@@ -96,19 +102,25 @@ type SettingsContext = {
 
 const tabs: Array<{ id: Tab; label: string }> = [
   { id: "account", label: "Account" },
-  { id: "brand", label: "Brand" },
+  { id: "brand", label: "Project Intelligence" },
   { id: "billing", label: "Billing" },
 ]
 
-const emptyProfile: BrandProfile = {
-  name: "",
-  tagline: "",
-  description: "",
-  targetAudience: [],
-  painPointsSolved: [],
-  keyFeatures: [],
-  tone: "",
-  competitors: [],
+const emptyProfile: ProjectIntelligenceProfile = {
+  overview: "",
+  capabilities: [],
+  icps: [],
+  personas: [],
+  painPoints: [],
+  pricingAndCompetitorComparisons: [],
+  whereProjectLeads: [],
+  whereCompetitorsLead: [],
+  weaknesses: [],
+  futureAdvantages: [],
+  positioning: "",
+  redditUsefulAngles: [],
+  avoidTopics: [],
+  agentNotes: [],
 }
 
 const plans: Array<{
@@ -167,21 +179,27 @@ function normalizeArray(value: unknown) {
   return []
 }
 
-function parseProfile(profileJson?: string): BrandProfile {
-  if (!profileJson) return emptyProfile
+function parseProfile(intelligenceJson?: string): ProjectIntelligenceProfile {
+  if (!intelligenceJson) return emptyProfile
 
   try {
-    const parsed = JSON.parse(profileJson) as Record<string, unknown>
+    const parsed = JSON.parse(intelligenceJson) as Record<string, unknown>
 
     return {
-      name: String(parsed.name ?? ""),
-      tagline: String(parsed.tagline ?? ""),
-      description: String(parsed.description ?? ""),
-      targetAudience: normalizeArray(parsed.targetAudience),
-      painPointsSolved: normalizeArray(parsed.painPointsSolved),
-      keyFeatures: normalizeArray(parsed.keyFeatures),
-      tone: String(parsed.tone ?? ""),
-      competitors: normalizeArray(parsed.competitors),
+      overview: String(parsed.overview ?? ""),
+      capabilities: normalizeArray(parsed.capabilities),
+      icps: normalizeArray(parsed.icps),
+      personas: normalizeArray(parsed.personas),
+      painPoints: normalizeArray(parsed.painPoints),
+      pricingAndCompetitorComparisons: normalizeArray(parsed.pricingAndCompetitorComparisons),
+      whereProjectLeads: normalizeArray(parsed.whereProjectLeads),
+      whereCompetitorsLead: normalizeArray(parsed.whereCompetitorsLead),
+      weaknesses: normalizeArray(parsed.weaknesses),
+      futureAdvantages: normalizeArray(parsed.futureAdvantages),
+      positioning: String(parsed.positioning ?? ""),
+      redditUsefulAngles: normalizeArray(parsed.redditUsefulAngles),
+      avoidTopics: normalizeArray(parsed.avoidTopics),
+      agentNotes: normalizeArray(parsed.agentNotes),
     }
   } catch {
     return emptyProfile
@@ -598,61 +616,79 @@ function AccountTab({
   )
 }
 
-function BrandTab({
+function ProjectIntelligenceTab({
   context,
 }: {
   context: SettingsContext
 }) {
-  const updateBrandProfile = useMutation(api.settings.updateBrandProfile)
-  const updateBrandUrls = useMutation(api.settings.updateBrandUrls)
+  const updateProjectIntelligenceProfile = useMutation(api.settings.updateProjectIntelligenceProfile)
+  const updateProjectIntelligenceUrls = useMutation(api.settings.updateProjectIntelligenceUrls)
   const retryOnboardingPipeline = useMutation(api.settings.retryOnboardingPipeline)
-  const reanalyzeBrandProfile = useMutation(api.settings.reanalyzeBrandProfile)
+  const reanalyzeProjectIntelligenceProfile = useMutation(api.settings.reanalyzeProjectIntelligenceProfile)
   const profile = useMemo(
-    () => parseProfile(context.brand?.profileJson),
-    [context.brand?.profileJson],
+    () => parseProfile(context.brand?.intelligenceJson),
+    [context.brand?.intelligenceJson],
   )
-  const [draft, setDraft] = useState<BrandProfile>(profile)
-  const [editingField, setEditingField] = useState<keyof BrandProfile | null>(null)
+  const [draft, setDraft] = useState<ProjectIntelligenceProfile>(profile)
+  const [editingField, setEditingField] = useState<keyof ProjectIntelligenceProfile | null>(null)
   const [savingProfile, setSavingProfile] = useState(false)
   const [websiteUrl, setWebsiteUrl] = useState(context.brand?.websiteUrl ?? "")
-  const [competitorUrl, setCompetitorUrl] = useState(context.brand?.competitorUrl ?? "")
+  const [competitorUrls, setCompetitorUrls] = useState(
+    context.brand?.competitorUrls.length ? context.brand.competitorUrls : [""],
+  )
   const [savingUrls, setSavingUrls] = useState(false)
   const [retryingPipeline, setRetryingPipeline] = useState(false)
-  const [reanalyzingBrand, setReanalyzingBrand] = useState(false)
+  const [reanalyzingIntelligence, setreanalyzingIntelligence] = useState(false)
   const [now] = useState(() => Date.now())
 
   const profileChanged = JSON.stringify(draft) !== JSON.stringify(profile)
   const urlsChanged =
     websiteUrl.trim() !== (context.brand?.websiteUrl ?? "") ||
-    competitorUrl.trim() !== (context.brand?.competitorUrl ?? "")
+    competitorUrls.map((url) => url.trim()).filter(Boolean).join("\n") !==
+      (context.brand?.competitorUrls ?? []).join("\n")
   const websiteChanged = websiteUrl.trim() !== (context.brand?.websiteUrl ?? "")
   const isEmptyProfile = JSON.stringify(profile) === JSON.stringify(emptyProfile)
   const profileAge = now - context.project.createdAt
   const profileIsLate = profileAge > 30 * 60 * 1000
 
-  const setTextField = (field: keyof BrandProfile, value: string) => {
+  const setTextField = (field: keyof ProjectIntelligenceProfile, value: string) => {
     setDraft((current) => ({
       ...current,
       [field]: value,
     }))
   }
 
-  const setArrayField = (field: keyof BrandProfile, value: string) => {
+  const setArrayField = (field: keyof ProjectIntelligenceProfile, value: string) => {
     setDraft((current) => ({
       ...current,
       [field]: normalizeArray(value),
     }))
   }
 
+  const updateCompetitorUrl = (index: number, value: string) => {
+    setCompetitorUrls((current) => {
+      const next = [...current]
+      next[index] = value
+      return next
+    })
+  }
+
+  const removeCompetitorUrl = (index: number) => {
+    setCompetitorUrls((current) => {
+      const next = current.filter((_, itemIndex) => itemIndex !== index)
+      return next.length > 0 ? next : [""]
+    })
+  }
+
   const saveProfile = async () => {
     setSavingProfile(true)
     try {
-      await updateBrandProfile({
+      await updateProjectIntelligenceProfile({
         projectId: context.project._id,
-        profileJson: JSON.stringify(draft),
+        intelligenceJson: JSON.stringify(draft),
       })
       setEditingField(null)
-      toast.success("Brand profile updated.")
+      toast.success("Project Intelligence Profile updated.")
     } catch (error) {
       toast.error(getErrorMessage(error))
     } finally {
@@ -663,12 +699,12 @@ function BrandTab({
   const saveUrls = async () => {
     setSavingUrls(true)
     try {
-      await updateBrandUrls({
+      await updateProjectIntelligenceUrls({
         projectId: context.project._id,
         websiteUrl,
-        competitorUrl,
+        competitorUrls: competitorUrls.map((url) => url.trim()).filter(Boolean),
       })
-      toast.success("Brand URLs updated.")
+      toast.success("Project intelligence URLs updated.")
     } catch (error) {
       toast.error(getErrorMessage(error))
     } finally {
@@ -680,7 +716,7 @@ function BrandTab({
     setRetryingPipeline(true)
     try {
       await retryOnboardingPipeline({ projectId: context.project._id })
-      toast.success("Brand analysis queued.")
+      toast.success("Project intelligence analysis queued.")
     } catch (error) {
       toast.error(getErrorMessage(error))
     } finally {
@@ -688,15 +724,15 @@ function BrandTab({
     }
   }
 
-  const regenerateBrandProfile = async () => {
-    setReanalyzingBrand(true)
+  const regenerateProjectIntelligenceProfile = async () => {
+    setreanalyzingIntelligence(true)
     try {
-      await reanalyzeBrandProfile({ projectId: context.project._id })
-      toast.success("Brand analysis queued.")
+      await reanalyzeProjectIntelligenceProfile({ projectId: context.project._id })
+      toast.success("Project intelligence analysis queued.")
     } catch (error) {
       toast.error(getErrorMessage(error))
     } finally {
-      setReanalyzingBrand(false)
+      setreanalyzingIntelligence(false)
     }
   }
 
@@ -706,7 +742,7 @@ function BrandTab({
         <p>
           {profileIsLate
             ? "Something went wrong. Click to retry."
-            : "Your brand profile is being generated. This usually takes a few minutes."}
+            : "Your Project Intelligence Profile is being generated. This usually takes a few minutes."}
         </p>
         {profileIsLate ? (
           <Button
@@ -726,12 +762,12 @@ function BrandTab({
 
   return (
     <div className="space-y-8">
-      <Section title="Brand Profile">
+      <Section title="Project Intelligence Profile">
         <div className="space-y-4 rounded-xl border border-border bg-surface p-5">
           {context.project.onboardingStatus === "error" ? (
             <div className="flex flex-col gap-3 rounded-lg border border-error/30 bg-error/5 p-3 text-[13px] text-error sm:flex-row sm:items-center sm:justify-between">
               <p>
-                Brand analysis failed{context.project.onboardingError ? `: ${context.project.onboardingError}` : "."}
+                Project intelligence analysis failed{context.project.onboardingError ? `: ${context.project.onboardingError}` : "."}
               </p>
               <Button
                 type="button"
@@ -747,14 +783,14 @@ function BrandTab({
           ) : null}
           {context.brand.scrapeStatus === "degraded" ? (
             <p className="rounded-lg bg-muted p-3 text-[13px] text-text-secondary">
-              We couldn&apos;t fully analyze your website. Consider editing your brand profile manually.
+              We couldn&apos;t fully analyze your website. Consider editing your Project Intelligence Profile manually.
             </p>
           ) : null}
           {isEmptyProfile ? (
             <p className="rounded-lg bg-muted p-3 text-[13px] text-text-secondary">
               {profileIsLate
                 ? "Something went wrong. Click to retry."
-                : "Your brand profile is being generated. This usually takes a few minutes."}
+                : "Your Project Intelligence Profile is being generated. This usually takes a few minutes."}
             </p>
           ) : null}
           {isEmptyProfile && profileIsLate ? (
@@ -771,65 +807,116 @@ function BrandTab({
           ) : null}
           <dl className="space-y-1">
             <ProfileField
-              label="Name"
-              value={draft.name}
-              editing={editingField === "name"}
-              onEdit={() => setEditingField("name")}
-              onChange={(value) => setTextField("name", value)}
-            />
-            <ProfileField
-              label="Tagline"
-              value={draft.tagline}
-              editing={editingField === "tagline"}
-              onEdit={() => setEditingField("tagline")}
-              onChange={(value) => setTextField("tagline", value)}
-            />
-            <ProfileField
-              label="Description"
-              value={draft.description}
+              label="Overview"
+              value={draft.overview}
               multiline
-              editing={editingField === "description"}
-              onEdit={() => setEditingField("description")}
-              onChange={(value) => setTextField("description", value)}
+              editing={editingField === "overview"}
+              onEdit={() => setEditingField("overview")}
+              onChange={(value) => setTextField("overview", value)}
             />
             <ProfileField
-              label="Target Audience"
-              value={draft.targetAudience.join(", ")}
-              arrayValue={draft.targetAudience}
-              editing={editingField === "targetAudience"}
-              onEdit={() => setEditingField("targetAudience")}
-              onChange={(value) => setArrayField("targetAudience", value)}
+              label="Capabilities"
+              value={draft.capabilities.join(", ")}
+              arrayValue={draft.capabilities}
+              editing={editingField === "capabilities"}
+              onEdit={() => setEditingField("capabilities")}
+              onChange={(value) => setArrayField("capabilities", value)}
             />
             <ProfileField
-              label="Pain Points Solved"
-              value={draft.painPointsSolved.join(", ")}
-              arrayValue={draft.painPointsSolved}
-              editing={editingField === "painPointsSolved"}
-              onEdit={() => setEditingField("painPointsSolved")}
-              onChange={(value) => setArrayField("painPointsSolved", value)}
+              label="ICPs"
+              value={draft.icps.join(", ")}
+              arrayValue={draft.icps}
+              editing={editingField === "icps"}
+              onEdit={() => setEditingField("icps")}
+              onChange={(value) => setArrayField("icps", value)}
             />
             <ProfileField
-              label="Key Features"
-              value={draft.keyFeatures.join(", ")}
-              arrayValue={draft.keyFeatures}
-              editing={editingField === "keyFeatures"}
-              onEdit={() => setEditingField("keyFeatures")}
-              onChange={(value) => setArrayField("keyFeatures", value)}
+              label="Personas"
+              value={draft.personas.join(", ")}
+              arrayValue={draft.personas}
+              editing={editingField === "personas"}
+              onEdit={() => setEditingField("personas")}
+              onChange={(value) => setArrayField("personas", value)}
             />
             <ProfileField
-              label="Tone"
-              value={draft.tone}
-              editing={editingField === "tone"}
-              onEdit={() => setEditingField("tone")}
-              onChange={(value) => setTextField("tone", value)}
+              label="Pain Points"
+              value={draft.painPoints.join(", ")}
+              arrayValue={draft.painPoints}
+              editing={editingField === "painPoints"}
+              onEdit={() => setEditingField("painPoints")}
+              onChange={(value) => setArrayField("painPoints", value)}
             />
             <ProfileField
-              label="Competitors"
-              value={draft.competitors.join(", ")}
-              arrayValue={draft.competitors}
-              editing={editingField === "competitors"}
-              onEdit={() => setEditingField("competitors")}
-              onChange={(value) => setArrayField("competitors", value)}
+              label="Pricing & Comparisons"
+              value={draft.pricingAndCompetitorComparisons.join(", ")}
+              arrayValue={draft.pricingAndCompetitorComparisons}
+              editing={editingField === "pricingAndCompetitorComparisons"}
+              onEdit={() => setEditingField("pricingAndCompetitorComparisons")}
+              onChange={(value) => setArrayField("pricingAndCompetitorComparisons", value)}
+            />
+            <ProfileField
+              label="Project Leads"
+              value={draft.whereProjectLeads.join(", ")}
+              arrayValue={draft.whereProjectLeads}
+              editing={editingField === "whereProjectLeads"}
+              onEdit={() => setEditingField("whereProjectLeads")}
+              onChange={(value) => setArrayField("whereProjectLeads", value)}
+            />
+            <ProfileField
+              label="Competitors Lead"
+              value={draft.whereCompetitorsLead.join(", ")}
+              arrayValue={draft.whereCompetitorsLead}
+              editing={editingField === "whereCompetitorsLead"}
+              onEdit={() => setEditingField("whereCompetitorsLead")}
+              onChange={(value) => setArrayField("whereCompetitorsLead", value)}
+            />
+            <ProfileField
+              label="Weaknesses"
+              value={draft.weaknesses.join(", ")}
+              arrayValue={draft.weaknesses}
+              editing={editingField === "weaknesses"}
+              onEdit={() => setEditingField("weaknesses")}
+              onChange={(value) => setArrayField("weaknesses", value)}
+            />
+            <ProfileField
+              label="Future Advantages"
+              value={draft.futureAdvantages.join(", ")}
+              arrayValue={draft.futureAdvantages}
+              editing={editingField === "futureAdvantages"}
+              onEdit={() => setEditingField("futureAdvantages")}
+              onChange={(value) => setArrayField("futureAdvantages", value)}
+            />
+            <ProfileField
+              label="Positioning"
+              value={draft.positioning}
+              multiline
+              editing={editingField === "positioning"}
+              onEdit={() => setEditingField("positioning")}
+              onChange={(value) => setTextField("positioning", value)}
+            />
+            <ProfileField
+              label="Reddit Angles"
+              value={draft.redditUsefulAngles.join(", ")}
+              arrayValue={draft.redditUsefulAngles}
+              editing={editingField === "redditUsefulAngles"}
+              onEdit={() => setEditingField("redditUsefulAngles")}
+              onChange={(value) => setArrayField("redditUsefulAngles", value)}
+            />
+            <ProfileField
+              label="Avoid Topics"
+              value={draft.avoidTopics.join(", ")}
+              arrayValue={draft.avoidTopics}
+              editing={editingField === "avoidTopics"}
+              onEdit={() => setEditingField("avoidTopics")}
+              onChange={(value) => setArrayField("avoidTopics", value)}
+            />
+            <ProfileField
+              label="Agent Notes"
+              value={draft.agentNotes.join(", ")}
+              arrayValue={draft.agentNotes}
+              editing={editingField === "agentNotes"}
+              onEdit={() => setEditingField("agentNotes")}
+              onChange={(value) => setArrayField("agentNotes", value)}
             />
           </dl>
 
@@ -846,7 +933,7 @@ function BrandTab({
                 Reset
               </Button>
               <Button type="button" onClick={saveProfile} disabled={savingProfile}>
-                {savingProfile ? "Saving..." : "Save profile"}
+                {savingProfile ? "Saving..." : "Save intelligence"}
               </Button>
             </div>
           ) : null}
@@ -858,23 +945,60 @@ function BrandTab({
           <FieldEditor label="Website URL" value={websiteUrl} onChange={setWebsiteUrl} />
           {websiteChanged ? (
             <p className="rounded-lg bg-accent-subtle p-3 text-[13px] text-accent">
-              Updating your website will trigger a new brand analysis overnight.
+              Updating your website will queue new project intelligence analysis.
             </p>
           ) : null}
-          <FieldEditor
-            label="Competitor URL"
-            value={competitorUrl}
-            onChange={setCompetitorUrl}
-          />
+          <div className="space-y-2">
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-[13px] font-medium text-text-primary">Competitor URLs</p>
+              <p className="text-xs text-text-tertiary">
+                {competitorUrls.map((url) => url.trim()).filter(Boolean).length}/{context.project.limits.maxCompetitors}
+              </p>
+            </div>
+            <div className="space-y-2">
+              {competitorUrls.map((url, index) => (
+                <div key={index} className="flex gap-2">
+                  <Input
+                    type="url"
+                    value={url}
+                    onChange={(event) => updateCompetitorUrl(index, event.target.value)}
+                    placeholder="https://competitor.com"
+                  />
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => removeCompetitorUrl(index)}
+                    aria-label="Remove competitor"
+                  >
+                    <Trash2 className="size-3.5" />
+                  </Button>
+                </div>
+              ))}
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setCompetitorUrls((current) => [...current, ""])}
+              disabled={
+                competitorUrls.map((url) => url.trim()).filter(Boolean).length >=
+                context.project.limits.maxCompetitors
+              }
+            >
+              <Plus className="size-3.5" />
+              Add competitor
+            </Button>
+          </div>
           <div className="flex flex-col gap-2 sm:flex-row sm:justify-between">
             <Button
               type="button"
               variant="outline"
-              onClick={regenerateBrandProfile}
-              disabled={reanalyzingBrand}
+              onClick={regenerateProjectIntelligenceProfile}
+              disabled={reanalyzingIntelligence}
             >
               <RefreshCw className="size-3.5" />
-              {reanalyzingBrand ? "Regenerating..." : "Regenerate brand profile"}
+              {reanalyzingIntelligence ? "Regenerating..." : "Regenerate Project Intelligence Profile"}
             </Button>
             <Button type="button" onClick={saveUrls} disabled={!urlsChanged || savingUrls}>
               {savingUrls ? "Saving..." : "Save URLs"}
@@ -1152,8 +1276,8 @@ export default function SettingsPage() {
         <AccountTab key={context.user.name} context={context} />
       ) : null}
       {activeTab === "brand" ? (
-        <BrandTab
-          key={`${context.brand?.profileJson ?? ""}:${context.brand?.websiteUrl ?? ""}:${context.brand?.competitorUrl ?? ""}:${context.project.onboardingStatus ?? ""}`}
+        <ProjectIntelligenceTab
+          key={`${context.brand?.intelligenceJson ?? ""}:${context.brand?.websiteUrl ?? ""}:${context.brand?.competitorUrls.join("|") ?? ""}:${context.project.onboardingStatus ?? ""}`}
           context={context}
         />
       ) : null}

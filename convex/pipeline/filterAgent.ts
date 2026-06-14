@@ -88,7 +88,7 @@ export const filterPosts = internalAction({
             "Prefer posts where a specific, helpful, non-promotional reply can add value.",
             "Avoid memes, ragebait, thin announcements, hiring posts, and posts with no clear business context.",
             `Return up to ${limits.filterTop} ranked IDs from the candidate list.`,
-            `Brand profile JSON: ${context.brand.profileJson}`,
+            `Project intelligence JSON: ${context.brand.intelligenceJson}`,
             `Candidates JSON: ${JSON.stringify(promptPosts)}`,
           ].join("\n\n"),
         })

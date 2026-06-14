@@ -26,23 +26,29 @@ export const runOnboardingPipeline = internalAction({
 
     try {
       const brand = await ctx.runQuery(
-        internal.onboarding.data.loadBrandForProject,
+        internal.onboarding.data.loadProjectIntelligenceProfile,
         { projectId: args.projectId },
       )
-      if (!brand) throw new Error("Brand not found")
+      if (!brand) throw new Error("Project intelligence profile not found")
 
-      if (brand.profileJson.trim() === "{}") {
+      if (brand.intelligenceJson.trim() === "{}") {
         const scraped = await ctx.runAction(
-          internal.onboarding.scrapeWebsite.scrapeWebsites,
+          internal.onboarding.scrapeProjectSources.scrapeProjectSources,
           { projectId: args.projectId },
+        )
+        const filtered = await ctx.runAction(
+          internal.onboarding.pageFiltering.filterUsefulProjectPages,
+          {
+            projectId: args.projectId,
+            pages: scraped.pages,
+          },
         )
 
         await ctx.runAction(
-          internal.onboarding.brandAgent.generateBrandProfile,
+          internal.onboarding.projectIntelligenceAgent.generateProjectIntelligenceProfile,
           {
             projectId: args.projectId,
-            websiteContent: scraped.websiteContent,
-            competitorContent: scraped.competitorContent,
+            usefulPages: filtered.usefulPages,
             scrapeStatus: scraped.scrapeStatus,
           },
         )

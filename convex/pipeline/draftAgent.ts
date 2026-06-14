@@ -40,7 +40,7 @@ export const generateSingleReply = internalAction({
       prompt: [
         "Draft one helpful Reddit reply for a B2B founder.",
         "Keep it specific, conversational, and non-promotional. Do not include links unless the post explicitly asks for resources.",
-        `Brand profile JSON: ${context.brand.profileJson}`,
+        `Project intelligence JSON: ${context.brand.intelligenceJson}`,
         `Post JSON: ${JSON.stringify({
           subreddit: context.post.subreddit,
           title: context.post.title,
@@ -79,7 +79,7 @@ export const generateSingleOriginalPost = internalAction({
       prompt: [
         "Draft one original Reddit post for a B2B founder.",
         "Make it useful as a standalone community post, not an ad. Avoid links, sales language, and product announcements.",
-        `Brand profile JSON: ${context.brand.profileJson}`,
+        `Project intelligence JSON: ${context.brand.intelligenceJson}`,
         `Subreddit context JSON: ${JSON.stringify(context.subreddit)}`,
       ].join("\n\n"),
     })

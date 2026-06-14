@@ -2,9 +2,9 @@ import { v } from "convex/values"
 import { internalQuery } from "../_generated/server"
 import { getPlanLimits } from "../lib/planLimits"
 
-export function isValidBrandProfile(profileJson: string) {
+export function isValidProjectIntelligenceProfile(intelligenceJson: string) {
   try {
-    const parsed = JSON.parse(profileJson)
+    const parsed = JSON.parse(intelligenceJson)
     return (
       typeof parsed === "object" &&
       parsed !== null &&
@@ -28,11 +28,11 @@ export const getProjectReadiness = internalQuery({
     }
 
     const brand = await ctx.db
-      .query("brands")
+      .query("projectIntelligenceProfiles")
       .withIndex("by_projectId", (q) => q.eq("projectId", args.projectId))
       .first()
-    if (!brand || !isValidBrandProfile(brand.profileJson)) {
-      return { ready: false as const, reason: "missing_brand_profile" }
+    if (!brand || !isValidProjectIntelligenceProfile(brand.intelligenceJson)) {
+      return { ready: false as const, reason: "missing_project_intelligence_profile" }
     }
 
     const subreddits = await ctx.db
@@ -53,7 +53,7 @@ export const getProjectReadiness = internalQuery({
         timezone: project.timezone,
       },
       brand: {
-        profileJson: brand.profileJson,
+        intelligenceJson: brand.intelligenceJson,
       },
     }
   },
@@ -96,11 +96,11 @@ export const loadFilterContext = internalQuery({
     if (!project) throw new Error("Project not found")
 
     const brand = await ctx.db
-      .query("brands")
+      .query("projectIntelligenceProfiles")
       .withIndex("by_projectId", (q) => q.eq("projectId", args.projectId))
       .first()
-    if (!brand || !isValidBrandProfile(brand.profileJson)) {
-      throw new Error("Brand profile is missing")
+    if (!brand || !isValidProjectIntelligenceProfile(brand.intelligenceJson)) {
+      throw new Error("Project intelligence profile is missing")
     }
 
     const posts = []
@@ -115,7 +115,7 @@ export const loadFilterContext = internalQuery({
         plan: project.plan,
       },
       brand: {
-        profileJson: brand.profileJson,
+        intelligenceJson: brand.intelligenceJson,
       },
       posts,
     }
@@ -132,13 +132,13 @@ export const loadReplyDraftContext = internalQuery({
     if (!project) throw new Error("Project not found")
 
     const brand = await ctx.db
-      .query("brands")
+      .query("projectIntelligenceProfiles")
       .withIndex("by_projectId", (q) => q.eq("projectId", args.projectId))
       .first()
     const post = await ctx.db.get(args.surfacedPostId)
 
-    if (!brand || !isValidBrandProfile(brand.profileJson)) {
-      throw new Error("Brand profile is missing")
+    if (!brand || !isValidProjectIntelligenceProfile(brand.intelligenceJson)) {
+      throw new Error("Project intelligence profile is missing")
     }
     if (!post || post.projectId !== args.projectId) {
       throw new Error("Surfaced post not found")
@@ -146,7 +146,7 @@ export const loadReplyDraftContext = internalQuery({
 
     return {
       brand: {
-        profileJson: brand.profileJson,
+        intelligenceJson: brand.intelligenceJson,
       },
       post,
     }
@@ -163,11 +163,11 @@ export const loadOriginalDraftContext = internalQuery({
     if (!project) throw new Error("Project not found")
 
     const brand = await ctx.db
-      .query("brands")
+      .query("projectIntelligenceProfiles")
       .withIndex("by_projectId", (q) => q.eq("projectId", args.projectId))
       .first()
-    if (!brand || !isValidBrandProfile(brand.profileJson)) {
-      throw new Error("Brand profile is missing")
+    if (!brand || !isValidProjectIntelligenceProfile(brand.intelligenceJson)) {
+      throw new Error("Project intelligence profile is missing")
     }
 
     const limits = getPlanLimits(project.plan)
@@ -193,7 +193,7 @@ export const loadOriginalDraftContext = internalQuery({
 
     return {
       brand: {
-        profileJson: brand.profileJson,
+        intelligenceJson: brand.intelligenceJson,
       },
       subreddit: {
         name: subreddit.name,
@@ -213,11 +213,11 @@ export const loadJudgeContext = internalQuery({
     if (!project) throw new Error("Project not found")
 
     const brand = await ctx.db
-      .query("brands")
+      .query("projectIntelligenceProfiles")
       .withIndex("by_projectId", (q) => q.eq("projectId", args.projectId))
       .first()
-    if (!brand || !isValidBrandProfile(brand.profileJson)) {
-      throw new Error("Brand profile is missing")
+    if (!brand || !isValidProjectIntelligenceProfile(brand.intelligenceJson)) {
+      throw new Error("Project intelligence profile is missing")
     }
 
     const postedSince = Date.now() - 7 * 24 * 60 * 60 * 1000
@@ -251,7 +251,7 @@ export const loadJudgeContext = internalQuery({
         plan: project.plan,
       },
       brand: {
-        profileJson: brand.profileJson,
+        intelligenceJson: brand.intelligenceJson,
       },
       performance,
     }

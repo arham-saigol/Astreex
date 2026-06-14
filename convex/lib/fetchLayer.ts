@@ -138,6 +138,19 @@ export async function communityPosts(
   return arrayFromPayload<FetchLayerPost>(payload, ["posts", "results"])
 }
 
+export async function searchPosts(
+  ctx: ActionCtx,
+  args: { query: string; sort?: string; time?: string; limit?: number },
+) {
+  const payload = await fetchLayerJson<unknown>(ctx, "search", {
+    query: args.query,
+    sort: args.sort ?? "relevance",
+    time: args.time ?? "month",
+    limit: args.limit ?? 25,
+  })
+  return arrayFromPayload<FetchLayerPost>(payload, ["posts", "results"])
+}
+
 export async function post(
   ctx: ActionCtx,
   args: { url?: string; id?: string; pages?: number },

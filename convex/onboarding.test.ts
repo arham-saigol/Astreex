@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest"
 import { api, internal } from "./_generated/api"
 import type { Id } from "./_generated/dataModel"
 import { getSubredditDiscoveryLimits } from "./lib/planLimits"
+import { selectSubredditsDeterministically } from "./onboarding/subredditDiscovery"
 import schema from "./schema"
 
 const modules = import.meta.glob("./**/*.ts")
@@ -13,6 +14,7 @@ function stubRequiredEnv() {
   vi.stubEnv("DEEPSEEK_API_KEY", "test")
   vi.stubEnv("ZERNIO_API_KEY", "zernio")
   vi.stubEnv("FETCHLAYER_API_KEY", "fetchlayer")
+  vi.stubEnv("FIREWORKS_API_KEY", "fireworks")
 }
 
 beforeEach(() => {
@@ -43,10 +45,11 @@ async function seedPipelineProject(
       lastActiveAt: Date.now(),
       createdAt: Date.now(),
     })
-    const brandId = await ctx.db.insert("brands", {
+    const brandId = await ctx.db.insert("projectIntelligenceProfiles", {
       projectId,
       websiteUrl: "https://astreex.example",
-      profileJson: "{}",
+      competitorUrls: [],
+      intelligenceJson: "{}",
       createdAt: Date.now(),
       updatedAt: Date.now(),
     })
@@ -57,17 +60,22 @@ async function seedPipelineProject(
 
 describe("onboarding pipeline helpers", () => {
   test("subreddit discovery limits match onboarding sizing", () => {
-    expect(getSubredditDiscoveryLimits("starter")).toEqual({
+    expect(getSubredditDiscoveryLimits("starter")).toMatchObject({
       discoverCount: 10,
       activeCount: 5,
+      maxRailBCandidates: 5,
+      activeScoreThreshold: 70,
+      backupScoreThreshold: 50,
     })
-    expect(getSubredditDiscoveryLimits("growth")).toEqual({
+    expect(getSubredditDiscoveryLimits("growth")).toMatchObject({
       discoverCount: 20,
       activeCount: 15,
+      maxRailBCandidates: 10,
     })
-    expect(getSubredditDiscoveryLimits("scale")).toEqual({
+    expect(getSubredditDiscoveryLimits("scale")).toMatchObject({
       discoverCount: 30,
       activeCount: 25,
+      maxRailBCandidates: 15,
     })
   })
 
@@ -98,25 +106,107 @@ describe("onboarding pipeline helpers", () => {
     expect(rows.filter((row) => row.active)).toHaveLength(25)
   })
 
-  test("saveBrandProfile caps generated competitors to the plan limit", async () => {
+  test("saveProjectIntelligenceProfile persists intelligence JSON", async () => {
     const t = convexTest(schema, modules)
     const { projectId, brandId } = await seedPipelineProject(t, "starter")
 
-    await t.mutation(internal.onboarding.data.saveBrandProfile, {
+    await t.mutation(internal.onboarding.data.saveProjectIntelligenceProfile, {
       projectId,
-      profileJson: JSON.stringify({
-        name: "Astreex",
-        competitors: ["A", "B", "C", "D"],
+      intelligenceJson: JSON.stringify({
+        overview: "Astreex helps founders distribute on Reddit.",
+        capabilities: ["monitoring"],
       }),
       scrapeStatus: "complete",
     })
 
     const brand = await t.run(async (ctx) => await ctx.db.get(brandId))
-    const profile = JSON.parse(brand?.profileJson ?? "{}") as {
-      competitors?: string[]
-    }
+    const profile = JSON.parse(brand?.intelligenceJson ?? "{}") as Record<string, unknown>
 
-    expect(profile.competitors).toEqual(["A", "B", "C"])
+    expect(profile.overview).toBe("Astreex helps founders distribute on Reddit.")
+    expect(brand?.scrapeStatus).toBe("complete")
+  })
+
+  test("completeOnboarding enforces competitor URL plan limits", async () => {
+    const t = convexTest(schema, modules)
+    const authed = t.withIdentity({
+      subject: "user_1",
+      email: "founder@example.com",
+    })
+
+    await expect(
+      authed.mutation(api.onboarding.completeOnboarding, {
+        projectName: "Astreex",
+        websiteUrl: "https://astreex.example",
+        competitorUrls: [
+          "https://a.example",
+          "https://b.example",
+          "https://c.example",
+          "https://d.example",
+        ],
+        plan: "starter",
+        timezone: "America/New_York",
+      }),
+    ).rejects.toThrow("Your plan supports up to 3 tracked competitors")
+  })
+
+  test("completeOnboarding accepts growth and scale competitor limits", async () => {
+    const growth = convexTest(schema, modules)
+    await growth.withIdentity({
+      subject: "user_growth",
+      email: "growth@example.com",
+    }).mutation(api.onboarding.prepareOnboardingProject, {
+      projectName: "Growth",
+      websiteUrl: "https://growth.example",
+      competitorUrls: Array.from({ length: 5 }, (_, index) => `https://g${index}.example`),
+      plan: "growth",
+      timezone: "America/New_York",
+    })
+
+    const scale = convexTest(schema, modules)
+    await scale.withIdentity({
+      subject: "user_scale",
+      email: "scale@example.com",
+    }).mutation(api.onboarding.prepareOnboardingProject, {
+      projectName: "Scale",
+      websiteUrl: "https://scale.example",
+      competitorUrls: Array.from({ length: 10 }, (_, index) => `https://s${index}.example`),
+      plan: "scale",
+      timezone: "America/New_York",
+    })
+  })
+
+  test("completeOnboarding rejects duplicate competitor URLs", async () => {
+    const t = convexTest(schema, modules)
+    await expect(
+      t.withIdentity({
+        subject: "user_1",
+        email: "founder@example.com",
+      }).mutation(api.onboarding.completeOnboarding, {
+        projectName: "Astreex",
+        websiteUrl: "https://astreex.example",
+        competitorUrls: ["https://a.example", "https://a.example/"],
+        plan: "growth",
+        timezone: "America/New_York",
+      }),
+    ).rejects.toThrow("Competitor URL contains duplicate URLs")
+  })
+
+  test("deterministic subreddit selection uses thresholds without force-fill", () => {
+    const selected = selectSubredditsDeterministically([
+      { name: "aaa", rail: "A", reason: "", relevanceScore: 95, audienceFit: "", topicFit: "", promotionRisk: "", contentOpportunities: [], reasoning: "", redFlags: [], memberCount: 30_000 },
+      { name: "bbb", rail: "A", reason: "", relevanceScore: 69, audienceFit: "", topicFit: "", promotionRisk: "", contentOpportunities: [], reasoning: "", redFlags: [], memberCount: 30_000 },
+      { name: "ccc", rail: "B", reason: "", relevanceScore: 49, audienceFit: "", topicFit: "", promotionRisk: "", contentOpportunities: [], reasoning: "", redFlags: [], memberCount: 30_000 },
+    ], {
+      activeSubredditLimit: 5,
+      inactiveBackupLimit: 5,
+      activeScoreThreshold: 70,
+      backupScoreThreshold: 50,
+    })
+
+    expect(selected.map((item) => [item.name, item.active])).toEqual([
+      ["aaa", true],
+      ["bbb", false],
+    ])
   })
 
   test("onboarding status mutations patch running complete and error states", async () => {
@@ -124,9 +214,9 @@ describe("onboarding pipeline helpers", () => {
     const { projectId, brandId } = await seedPipelineProject(t)
 
     await t.mutation(internal.onboarding.data.markOnboardingRunning, { projectId })
-    await t.mutation(internal.onboarding.data.saveBrandProfile, {
+    await t.mutation(internal.onboarding.data.saveProjectIntelligenceProfile, {
       projectId,
-      profileJson: JSON.stringify({ name: "Astreex" }),
+      intelligenceJson: JSON.stringify({ name: "Astreex" }),
       scrapeStatus: "degraded",
     })
     await t.mutation(internal.onboarding.data.markOnboardingError, {

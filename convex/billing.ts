@@ -122,6 +122,17 @@ async function enforceDowngradeLimits(
   for (const account of excessAccounts) {
     await ctx.db.patch(account._id, { isActive: false })
   }
+
+  const profile = await ctx.db
+    .query("projectIntelligenceProfiles")
+    .withIndex("by_projectId", (q) => q.eq("projectId", projectId))
+    .first()
+  if (profile && profile.competitorUrls.length > limits.maxCompetitors) {
+    await ctx.db.patch(profile._id, {
+      competitorUrls: profile.competitorUrls.slice(0, limits.maxCompetitors),
+      updatedAt: Date.now(),
+    })
+  }
 }
 
 function billingPatch(args: {

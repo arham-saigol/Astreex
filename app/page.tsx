@@ -31,7 +31,7 @@ const steps = [
     number: "01",
     title: "Connect your product",
     description:
-      "Add your website. Our AI reads it and builds your brand profile automatically.",
+      "Add your website. Our AI reads it and builds your Project Intelligence Profile automatically.",
   },
   {
     number: "02",
@@ -68,7 +68,7 @@ const features = [
   },
   {
     icon: MessageSquareText,
-    title: "Brand-aware replies",
+    title: "Context-aware replies",
     description:
       "Every reply matches your tone and links your product naturally — never spammy.",
   },

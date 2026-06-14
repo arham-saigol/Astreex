@@ -17,7 +17,7 @@ export type Plan = "starter" | "growth" | "scale"
 export interface OnboardingData {
   projectName: string
   websiteUrl: string
-  competitorUrl: string
+  competitorUrls: string[]
   plan: Plan
   redditAccounts: { username: string }[]
   timezone: string
@@ -43,7 +43,7 @@ export default function OnboardingPage() {
   const [data, setData] = useState<OnboardingData>({
     projectName: "",
     websiteUrl: "",
-    competitorUrl: "",
+    competitorUrls: [],
     plan: "growth",
     redditAccounts: [],
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
@@ -77,7 +77,7 @@ export default function OnboardingPage() {
         projectId: draft.projectId,
         projectName: draft.projectName,
         websiteUrl: draft.websiteUrl,
-        competitorUrl: draft.competitorUrl,
+        competitorUrls: draft.competitorUrls,
         plan: draft.plan,
         timezone: draft.timezone,
         redditAccounts: draft.redditAccounts,
@@ -103,7 +103,7 @@ export default function OnboardingPage() {
     const result = await prepareOnboardingProject({
       projectName: data.projectName,
       websiteUrl: data.websiteUrl,
-      competitorUrl: data.competitorUrl || undefined,
+      competitorUrls: data.competitorUrls,
       plan: data.plan,
       timezone: data.timezone,
     })
@@ -151,7 +151,7 @@ export default function OnboardingPage() {
       await completeOnboarding({
         projectName: data.projectName,
         websiteUrl: data.websiteUrl,
-        competitorUrl: data.competitorUrl || undefined,
+        competitorUrls: data.competitorUrls,
         plan: data.plan,
         timezone: data.timezone,
       })

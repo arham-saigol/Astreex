@@ -9,19 +9,9 @@ import {
 import { internal } from "./_generated/api"
 import type { Id } from "./_generated/dataModel"
 import { getPlanLimits } from "./lib/planLimits"
+import { normalizeHttpUrl, normalizeOptionalHttpUrls } from "./lib/urls"
 
-const profileJsonValidator = v.string()
-
-function trackedCompetitorCount(profileJson: string) {
-  const parsed = JSON.parse(profileJson) as unknown
-  if (typeof parsed !== "object" || parsed === null) return 0
-
-  const competitors = (parsed as Record<string, unknown>).competitors
-
-  if (!Array.isArray(competitors)) return 0
-
-  return competitors.map((item) => String(item).trim()).filter(Boolean).length
-}
+const intelligenceJsonValidator = v.string()
 
 async function getCurrentUser(ctx: QueryCtx | MutationCtx) {
   const identity = await ctx.auth.getUserIdentity()
@@ -67,12 +57,16 @@ async function deleteProjectRows(
   projectId: Id<"projects">,
 ) {
   const tables = [
+    "projectIntelligenceChangeEvents",
+    "monitoredPageSnapshots",
+    "monitoredPages",
+    "projectIntelligenceBuilds",
     "postedContent",
     "cards",
     "surfacedPosts",
     "subreddits",
     "redditAccounts",
-    "brands",
+    "projectIntelligenceProfiles",
   ] as const
 
   let deletedRows = 0
@@ -94,12 +88,16 @@ async function deleteProjectRows(
 
 async function hasProjectRows(ctx: MutationCtx, projectId: Id<"projects">) {
   const tables = [
+    "projectIntelligenceChangeEvents",
+    "monitoredPageSnapshots",
+    "monitoredPages",
+    "projectIntelligenceBuilds",
     "postedContent",
     "cards",
     "surfacedPosts",
     "subreddits",
     "redditAccounts",
-    "brands",
+    "projectIntelligenceProfiles",
   ] as const
 
   for (const table of tables) {
@@ -152,7 +150,7 @@ export const getSettingsContext = query({
 
     const { user, project } = current
     const brand = await ctx.db
-      .query("brands")
+      .query("projectIntelligenceProfiles")
       .withIndex("by_projectId", (q) => q.eq("projectId", project._id))
       .first()
 
@@ -187,8 +185,8 @@ export const getSettingsContext = query({
         ? {
             _id: brand._id,
             websiteUrl: brand.websiteUrl,
-            competitorUrl: brand.competitorUrl ?? "",
-            profileJson: brand.profileJson,
+            competitorUrls: brand.competitorUrls,
+            intelligenceJson: brand.intelligenceJson,
             scrapeStatus: brand.scrapeStatus ?? null,
           }
         : null,
@@ -217,57 +215,102 @@ export const updateUserName = mutation({
   },
 })
 
-export const updateBrandProfile = mutation({
+export const updateProjectIntelligenceProfile = mutation({
   args: {
     projectId: v.id("projects"),
-    profileJson: profileJsonValidator,
+    intelligenceJson: intelligenceJsonValidator,
   },
   handler: async (ctx, args) => {
-    const project = await getOwnedProject(ctx, args.projectId)
-
-    const competitorCount = trackedCompetitorCount(args.profileJson)
-    const competitorLimit = getPlanLimits(project.plan).maxCompetitors
-    if (competitorCount > competitorLimit) {
-      throw new Error(`Your plan supports up to ${competitorLimit} tracked competitors`)
-    }
+    await getOwnedProject(ctx, args.projectId)
 
     const brand = await ctx.db
-      .query("brands")
+      .query("projectIntelligenceProfiles")
       .withIndex("by_projectId", (q) => q.eq("projectId", args.projectId))
       .first()
-    if (!brand) throw new Error("Brand not found")
+    if (!brand) throw new Error("Project intelligence profile not found")
 
     await ctx.db.patch(brand._id, {
-      profileJson: args.profileJson,
+      intelligenceJson: args.intelligenceJson,
       updatedAt: Date.now(),
     })
   },
 })
 
-export const updateBrandUrls = mutation({
+export const updateProjectIntelligenceUrls = mutation({
   args: {
     projectId: v.id("projects"),
     websiteUrl: v.string(),
-    competitorUrl: v.string(),
+    competitorUrls: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args) => {
-    await getOwnedProject(ctx, args.projectId)
+    const project = await getOwnedProject(ctx, args.projectId)
 
-    const websiteUrl = args.websiteUrl.trim()
-    const competitorUrl = args.competitorUrl.trim()
-    if (!websiteUrl) throw new Error("Website URL is required")
+    const websiteUrl = normalizeHttpUrl(args.websiteUrl, "Website URL")
+    const competitorUrls = normalizeOptionalHttpUrls(
+      args.competitorUrls,
+      "Competitor URL",
+    )
+    const competitorLimit = getPlanLimits(project.plan).maxCompetitors
+    if (competitorUrls.length > competitorLimit) {
+      throw new Error(`Your plan supports up to ${competitorLimit} tracked competitors`)
+    }
 
     const brand = await ctx.db
-      .query("brands")
+      .query("projectIntelligenceProfiles")
       .withIndex("by_projectId", (q) => q.eq("projectId", args.projectId))
       .first()
-    if (!brand) throw new Error("Brand not found")
+    if (!brand) throw new Error("Project intelligence profile not found")
 
     await ctx.db.patch(brand._id, {
       websiteUrl,
-      competitorUrl,
+      competitorUrls,
       updatedAt: Date.now(),
     })
+
+    const removedIndexes = new Set<number>()
+    brand.competitorUrls.forEach((url, index) => {
+      if (!competitorUrls.some((nextUrl) => nextUrl.toLowerCase() === url.toLowerCase())) {
+        removedIndexes.add(index)
+      }
+    })
+
+    if (removedIndexes.size > 0) {
+      const monitoredPages = await ctx.db
+        .query("monitoredPages")
+        .withIndex("by_projectId", (q) => q.eq("projectId", args.projectId))
+        .take(200)
+
+      for (const page of monitoredPages) {
+        if (
+          page.sourceType === "competitor" &&
+          page.competitorIndex !== undefined &&
+          removedIndexes.has(page.competitorIndex)
+        ) {
+          await ctx.db.patch(page._id, {
+            active: false,
+            updatedAt: Date.now(),
+          })
+        }
+      }
+    }
+
+    if (
+      websiteUrl !== brand.websiteUrl ||
+      competitorUrls.join("\n") !== brand.competitorUrls.join("\n")
+    ) {
+      await ctx.db.patch(brand._id, {
+        intelligenceJson: "{}",
+        updatedAt: Date.now(),
+      })
+      await ctx.db.patch(args.projectId, {
+        onboardingStatus: "running",
+        onboardingError: undefined,
+        lastActiveAt: Date.now(),
+      })
+      await ctx.scheduler.runAfter(0, internal.onboarding.pipeline.runOnboardingPipeline, {
+        projectId: args.projectId,
+      })
+    }
   },
 })
 
@@ -292,7 +335,7 @@ export const retryOnboardingPipeline = mutation({
   },
 })
 
-export const reanalyzeBrandProfile = mutation({
+export const reanalyzeProjectIntelligenceProfile = mutation({
   args: {
     projectId: v.id("projects"),
   },
@@ -300,14 +343,14 @@ export const reanalyzeBrandProfile = mutation({
     await getOwnedProject(ctx, args.projectId)
 
     const brand = await ctx.db
-      .query("brands")
+      .query("projectIntelligenceProfiles")
       .withIndex("by_projectId", (q) => q.eq("projectId", args.projectId))
       .first()
-    if (!brand) throw new Error("Brand not found")
+    if (!brand) throw new Error("Project intelligence profile not found")
 
     const now = Date.now()
     await ctx.db.patch(brand._id, {
-      profileJson: "{}",
+      intelligenceJson: "{}",
       updatedAt: now,
     })
     await ctx.db.patch(args.projectId, {

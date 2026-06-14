@@ -17,6 +17,7 @@ function stubRequiredEnv() {
   vi.stubEnv("DEEPSEEK_API_KEY", "test")
   vi.stubEnv("ZERNIO_API_KEY", "zernio")
   vi.stubEnv("FETCHLAYER_API_KEY", "fetchlayer")
+  vi.stubEnv("FIREWORKS_API_KEY", "fireworks")
 }
 
 beforeEach(() => {
@@ -99,19 +100,19 @@ async function seedActiveAccounts(
 
 describe("billing limits", () => {
   test("getPlanLimits returns user-facing limits", () => {
-    expect(getPlanLimits("starter")).toEqual({
+    expect(getPlanLimits("starter")).toMatchObject({
       cardsPerDay: 5,
       maxSubreddits: 5,
       maxCompetitors: 3,
       maxRedditAccounts: 1,
     })
-    expect(getPlanLimits("growth")).toEqual({
+    expect(getPlanLimits("growth")).toMatchObject({
       cardsPerDay: 15,
       maxSubreddits: 15,
       maxCompetitors: 5,
       maxRedditAccounts: 2,
     })
-    expect(getPlanLimits("scale")).toEqual({
+    expect(getPlanLimits("scale")).toMatchObject({
       cardsPerDay: 40,
       maxSubreddits: 25,
       maxCompetitors: 10,

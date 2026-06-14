@@ -3,6 +3,7 @@ import { internal } from "./_generated/api"
 import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server"
 import type { Doc, Id } from "./_generated/dataModel"
 import { getPlanLimits } from "./lib/planLimits"
+import { normalizeHttpUrl, normalizeOptionalHttpUrls } from "./lib/urls"
 
 type Plan = "starter" | "growth" | "scale"
 
@@ -65,39 +66,30 @@ function planAccountLimit(plan: Plan) {
 type PrepareProjectArgs = {
   projectName: string
   websiteUrl: string
-  competitorUrl?: string
+  competitorUrls?: string[]
   plan: Plan
   timezone: string
-}
-
-function validateHttpUrl(value: string, label: string) {
-  let url: URL
-  try {
-    url = new URL(value)
-  } catch {
-    throw new Error(`${label} must be a valid URL`)
-  }
-
-  if (url.protocol !== "http:" && url.protocol !== "https:") {
-    throw new Error(`${label} must start with http:// or https://`)
-  }
 }
 
 async function prepareProject(ctx: MutationCtx, args: PrepareProjectArgs) {
   const user = await getOrCreateUser(ctx)
   const projectName = args.projectName.trim()
-  const websiteUrl = args.websiteUrl.trim()
-  const competitorUrl = args.competitorUrl?.trim()
+  const websiteUrl = normalizeHttpUrl(args.websiteUrl, "Website URL")
+  const competitorUrls = normalizeOptionalHttpUrls(
+    args.competitorUrls,
+    "Competitor URL",
+  )
+  const competitorLimit = getPlanLimits(args.plan).maxCompetitors
 
   if (!projectName) throw new Error("Project name is required")
   if (projectName.length > 100) throw new Error("Project name is too long")
-  if (!websiteUrl) throw new Error("Website URL is required")
   if (websiteUrl.length > 2048) throw new Error("Website URL is too long")
-  if (competitorUrl && competitorUrl.length > 2048) {
+  if (competitorUrls.some((url) => url.length > 2048)) {
     throw new Error("Competitor URL is too long")
   }
-  validateHttpUrl(websiteUrl, "Website URL")
-  if (competitorUrl) validateHttpUrl(competitorUrl, "Competitor URL")
+  if (competitorUrls.length > competitorLimit) {
+    throw new Error(`Your plan supports up to ${competitorLimit} tracked competitors`)
+  }
 
   const now = Date.now()
 
@@ -121,11 +113,11 @@ async function prepareProject(ctx: MutationCtx, args: PrepareProjectArgs) {
       createdAt: now,
     })
 
-    await ctx.db.insert("brands", {
+    await ctx.db.insert("projectIntelligenceProfiles", {
       projectId,
       websiteUrl,
-      competitorUrl,
-      profileJson: "{}",
+      competitorUrls,
+      intelligenceJson: "{}",
       createdAt: now,
       updatedAt: now,
     })
@@ -141,22 +133,22 @@ async function prepareProject(ctx: MutationCtx, args: PrepareProjectArgs) {
   })
 
   const brand = await ctx.db
-    .query("brands")
+    .query("projectIntelligenceProfiles")
     .withIndex("by_projectId", (q) => q.eq("projectId", project._id))
     .first()
 
   if (brand) {
     await ctx.db.patch(brand._id, {
       websiteUrl,
-      competitorUrl,
+      competitorUrls,
       updatedAt: now,
     })
   } else {
-    await ctx.db.insert("brands", {
+    await ctx.db.insert("projectIntelligenceProfiles", {
       projectId: project._id,
       websiteUrl,
-      competitorUrl,
-      profileJson: "{}",
+      competitorUrls,
+      intelligenceJson: "{}",
       createdAt: now,
       updatedAt: now,
     })
@@ -202,7 +194,7 @@ export const getOnboardingDraft = query({
     if (!draftProject) return null
 
     const brand = await ctx.db
-      .query("brands")
+      .query("projectIntelligenceProfiles")
       .withIndex("by_projectId", (q) => q.eq("projectId", draftProject._id))
       .first()
 
@@ -215,7 +207,7 @@ export const getOnboardingDraft = query({
       projectId: draftProject._id,
       projectName: draftProject.name,
       websiteUrl: brand?.websiteUrl ?? "",
-      competitorUrl: brand?.competitorUrl ?? "",
+      competitorUrls: brand?.competitorUrls ?? [],
       plan: draftProject.plan,
       timezone: draftProject.timezone,
       redditAccounts: redditAccounts.map((account) => ({
@@ -229,7 +221,7 @@ export const prepareOnboardingProject = mutation({
   args: {
     projectName: v.string(),
     websiteUrl: v.string(),
-    competitorUrl: v.optional(v.string()),
+    competitorUrls: v.optional(v.array(v.string())),
     plan: planValidator,
     timezone: v.string(),
   },
@@ -242,7 +234,7 @@ export const completeOnboarding = mutation({
   args: {
     projectName: v.string(),
     websiteUrl: v.string(),
-    competitorUrl: v.optional(v.string()),
+    competitorUrls: v.optional(v.array(v.string())),
     plan: planValidator,
     timezone: v.string(),
   },

@@ -24,6 +24,18 @@ const scrapeStatus = v.union(
   v.literal("complete"),
   v.literal("degraded"),
 )
+const monitoredSourceType = v.union(v.literal("own"), v.literal("competitor"))
+const intelligenceBuildStatus = v.union(
+  v.literal("running"),
+  v.literal("complete"),
+  v.literal("failed"),
+)
+const intelligenceChangeStatus = v.union(
+  v.literal("pending"),
+  v.literal("profile_updated"),
+  v.literal("not_significant"),
+  v.literal("failed"),
+)
 const redditHealthStatus = v.union(
   v.literal("healthy"),
   v.literal("warning"),
@@ -80,14 +92,70 @@ export default defineSchema({
     .index("by_creemCustomerId", ["creemCustomerId"])
     .index("by_creemSubscriptionId", ["creemSubscriptionId"]),
 
-  brands: defineTable({
+  projectIntelligenceProfiles: defineTable({
     projectId: v.id("projects"),
     websiteUrl: v.string(),
-    competitorUrl: v.optional(v.string()),
-    profileJson: v.string(),
+    competitorUrls: v.array(v.string()),
+    intelligenceJson: v.string(),
     scrapeStatus: v.optional(scrapeStatus),
     createdAt: v.number(),
     updatedAt: v.number(),
+  }).index("by_projectId", ["projectId"]),
+
+  monitoredPages: defineTable({
+    projectId: v.id("projects"),
+    profileId: v.id("projectIntelligenceProfiles"),
+    sourceType: monitoredSourceType,
+    competitorIndex: v.optional(v.number()),
+    url: v.string(),
+    normalizedUrl: v.string(),
+    title: v.optional(v.string()),
+    pageKind: v.optional(v.string()),
+    active: v.boolean(),
+    lastFetchedAt: v.optional(v.number()),
+    nextCheckAt: v.number(),
+    lastContentHash: v.optional(v.string()),
+    lastSnapshotId: v.optional(v.id("monitoredPageSnapshots")),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_projectId", ["projectId"])
+    .index("by_projectId_and_normalizedUrl", ["projectId", "normalizedUrl"])
+    .index("by_active_and_nextCheckAt", ["active", "nextCheckAt"]),
+
+  monitoredPageSnapshots: defineTable({
+    projectId: v.id("projects"),
+    monitoredPageId: v.id("monitoredPages"),
+    fetchedAt: v.number(),
+    contentHash: v.string(),
+    normalizedText: v.string(),
+    title: v.optional(v.string()),
+    exaId: v.optional(v.string()),
+  })
+    .index("by_monitoredPageId", ["monitoredPageId"])
+    .index("by_projectId", ["projectId"]),
+
+  projectIntelligenceBuilds: defineTable({
+    projectId: v.id("projects"),
+    profileId: v.id("projectIntelligenceProfiles"),
+    status: intelligenceBuildStatus,
+    model: v.string(),
+    sourcePageCount: v.number(),
+    usefulPageCount: v.number(),
+    startedAt: v.number(),
+    finishedAt: v.optional(v.number()),
+    error: v.optional(v.string()),
+  }).index("by_projectId", ["projectId"]),
+
+  projectIntelligenceChangeEvents: defineTable({
+    projectId: v.id("projects"),
+    monitoredPageId: v.id("monitoredPages"),
+    previousSnapshotId: v.optional(v.id("monitoredPageSnapshots")),
+    newSnapshotId: v.id("monitoredPageSnapshots"),
+    status: intelligenceChangeStatus,
+    summary: v.optional(v.string()),
+    createdAt: v.number(),
+    processedAt: v.optional(v.number()),
   }).index("by_projectId", ["projectId"]),
 
   redditAccounts: defineTable({

@@ -12,6 +12,7 @@ function stubRequiredEnv() {
   vi.stubEnv("DEEPSEEK_API_KEY", "test")
   vi.stubEnv("ZERNIO_API_KEY", "zernio")
   vi.stubEnv("FETCHLAYER_API_KEY", "fetchlayer")
+  vi.stubEnv("FIREWORKS_API_KEY", "fireworks")
 }
 
 beforeEach(() => {
@@ -47,10 +48,11 @@ async function seedSettingsProject(
       lastActiveAt: Date.now(),
       createdAt: Date.now(),
     })
-    const brandId = await ctx.db.insert("brands", {
+    const brandId = await ctx.db.insert("projectIntelligenceProfiles", {
       projectId,
       websiteUrl: "https://astreex.example",
-      profileJson: JSON.stringify({ name: "Astreex" }),
+      competitorUrls: [],
+      intelligenceJson: JSON.stringify({ name: "Astreex" }),
       createdAt: Date.now(),
       updatedAt: Date.now(),
     })
@@ -60,27 +62,71 @@ async function seedSettingsProject(
 }
 
 describe("settings mutations", () => {
-  test("updateBrandProfile enforces tracked competitor limits", async () => {
+  test("updateProjectIntelligenceUrls enforces competitor URL limits", async () => {
     const t = convexTest(schema, modules)
     const { projectId } = await seedSettingsProject(t, { plan: "starter" })
 
     await expect(
-      t.withIdentity({ subject: "user_1" }).mutation(api.settings.updateBrandProfile, {
+      t.withIdentity({ subject: "user_1" }).mutation(api.settings.updateProjectIntelligenceUrls, {
         projectId,
-        profileJson: JSON.stringify({
-          name: "Astreex",
-          competitors: ["A", "B", "C", "D"],
-        }),
+        websiteUrl: "https://astreex.example",
+        competitorUrls: [
+          "https://a.example",
+          "https://b.example",
+          "https://c.example",
+          "https://d.example",
+        ],
       }),
     ).rejects.toThrow("Your plan supports up to 3 tracked competitors")
   })
 
-  test("reanalyzeBrandProfile resets profile and queues onboarding pipeline", async () => {
+  test("updateProjectIntelligenceUrls deactivates removed competitor pages and queues analysis", async () => {
+    const t = convexTest(schema, modules)
+    const { projectId, brandId } = await seedSettingsProject(t, { plan: "growth" })
+    const pageId = await t.run(async (ctx) => {
+      await ctx.db.patch(brandId, {
+        competitorUrls: ["https://a.example/", "https://b.example/"],
+      })
+      return await ctx.db.insert("monitoredPages", {
+        projectId,
+        profileId: brandId,
+        sourceType: "competitor",
+        competitorIndex: 1,
+        url: "https://b.example/",
+        normalizedUrl: "https://b.example/",
+        active: true,
+        nextCheckAt: Date.now(),
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      })
+    })
+
+    await t.withIdentity({ subject: "user_1" }).mutation(
+      api.settings.updateProjectIntelligenceUrls,
+      {
+        projectId,
+        websiteUrl: "https://astreex.example",
+        competitorUrls: ["https://a.example"],
+      },
+    )
+
+    const state = await t.run(async (ctx) => ({
+      page: await ctx.db.get(pageId),
+      profile: await ctx.db.get(brandId),
+      scheduled: await ctx.db.system.query("_scheduled_functions").collect(),
+    }))
+
+    expect(state.page?.active).toBe(false)
+    expect(state.profile?.intelligenceJson).toBe("{}")
+    expect(state.scheduled).toHaveLength(1)
+  })
+
+  test("reanalyzeProjectIntelligenceProfile resets profile and queues onboarding pipeline", async () => {
     const t = convexTest(schema, modules)
     const { projectId, brandId } = await seedSettingsProject(t)
 
     const result = await t.withIdentity({ subject: "user_1" }).mutation(
-      api.settings.reanalyzeBrandProfile,
+      api.settings.reanalyzeProjectIntelligenceProfile,
       { projectId },
     )
 
@@ -91,7 +137,7 @@ describe("settings mutations", () => {
     }))
 
     expect(result.queued).toBe(true)
-    expect(state.brand?.profileJson).toBe("{}")
+    expect(state.brand?.intelligenceJson).toBe("{}")
     expect(state.project?.onboardingStatus).toBe("running")
     expect(state.project?.onboardingError).toBeUndefined()
     expect(state.scheduled).toHaveLength(1)
