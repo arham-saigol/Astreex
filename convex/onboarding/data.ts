@@ -178,6 +178,7 @@ export const persistUsefulProjectPages = internalMutation({
   handler: async (ctx, args) => {
     const now = Date.now()
     const nextCheckAt = now + 7 * 24 * 60 * 60 * 1000
+    const incomingUrls = new Set(args.pages.map((page) => page.normalizedUrl))
     let saved = 0
 
     for (const page of args.pages.slice(0, 80)) {
@@ -229,6 +230,21 @@ export const persistUsefulProjectPages = internalMutation({
         lastSnapshotId: snapshotId,
       })
       saved++
+    }
+
+    for await (const page of ctx.db
+      .query("monitoredPages")
+      .withIndex("by_projectId", (q) => q.eq("projectId", args.projectId))) {
+      if (
+        page.profileId === args.profileId &&
+        page.active &&
+        !incomingUrls.has(page.normalizedUrl)
+      ) {
+        await ctx.db.patch(page._id, {
+          active: false,
+          updatedAt: now,
+        })
+      }
     }
 
     return { saved }

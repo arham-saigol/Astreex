@@ -83,6 +83,13 @@ export const filterUsefulProjectPages = internalAction({
       const classificationByUrl = new Map(
         result.object.pages.map((page) => [page.normalizedUrl, page]),
       )
+      const missingClassifications = new Set(args.pages.map((page) => page.normalizedUrl))
+      for (const normalizedUrl of classificationByUrl.keys()) {
+        missingClassifications.delete(normalizedUrl)
+      }
+      if (missingClassifications.size > 0) {
+        throw new Error("Classifier response missing one or more input URLs")
+      }
       const usefulPages = args.pages.flatMap((page) => {
         const classification = classificationByUrl.get(page.normalizedUrl)
         if (!classification?.useful) return []

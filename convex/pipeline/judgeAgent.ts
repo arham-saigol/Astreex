@@ -8,6 +8,7 @@ import { internalAction } from "../_generated/server"
 import { deepseekV4Pro, judgeSettings } from "../lib/ai"
 import { getPipelineLimits } from "../lib/planLimits"
 import { sanitizeJudgeSelection } from "../lib/judgeSelection"
+import { compactIntelligenceJson } from "./intelligenceContext"
 import { draftValidator, type Draft } from "./validators"
 
 const judgeSchema = z.object({
@@ -60,7 +61,7 @@ export const selectCards = internalAction({
             `Return exactly ${Math.min(limits.cardsPerDay, args.drafts.length)} zero-based draft indices when enough drafts exist.`,
             `Include at least ${limits.minOriginals} original posts when that many are available.`,
             "Prefer usefulness, brand fit, and subreddit diversity. Avoid promotional or repetitive drafts.",
-            `Project intelligence JSON: ${context.brand.intelligenceJson}`,
+            `Project intelligence JSON: ${compactIntelligenceJson(context.brand.intelligenceJson, "judge")}`,
             `Last 7 days performance JSON: ${JSON.stringify(context.performance)}`,
             `Drafts JSON: ${JSON.stringify(args.drafts.map(draftForPrompt))}`,
           ].join("\n\n"),

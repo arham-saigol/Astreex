@@ -9,6 +9,7 @@ import type { Id } from "../_generated/dataModel"
 import { deepseekV4Pro, filterSettings } from "../lib/ai"
 import { getPipelineLimits } from "../lib/planLimits"
 import { selectFilterCandidates } from "../lib/candidatePool"
+import { compactIntelligenceJson } from "./intelligenceContext"
 
 const filterResultSchema = z.object({
   ranked: z.array(z.object({
@@ -88,7 +89,7 @@ export const filterPosts = internalAction({
             "Prefer posts where a specific, helpful, non-promotional reply can add value.",
             "Avoid memes, ragebait, thin announcements, hiring posts, and posts with no clear business context.",
             `Return up to ${limits.filterTop} ranked IDs from the candidate list.`,
-            `Project intelligence JSON: ${context.brand.intelligenceJson}`,
+            `Project intelligence JSON: ${compactIntelligenceJson(context.brand.intelligenceJson, "filter")}`,
             `Candidates JSON: ${JSON.stringify(promptPosts)}`,
           ].join("\n\n"),
         })

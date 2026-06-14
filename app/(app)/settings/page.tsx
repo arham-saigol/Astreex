@@ -77,6 +77,7 @@ type SettingsContext = {
     planStatus: PlanStatus
     onboardingStatus: OnboardingStatus | null
     onboardingError: string | null
+    onboardingAnalysisStartedAt: number | null
     createdAt: number
     trialEndsAt: number | null
     billingInterval: "monthly" | "annual" | null
@@ -648,7 +649,9 @@ function ProjectIntelligenceTab({
       (context.brand?.competitorUrls ?? []).join("\n")
   const websiteChanged = websiteUrl.trim() !== (context.brand?.websiteUrl ?? "")
   const isEmptyProfile = JSON.stringify(profile) === JSON.stringify(emptyProfile)
-  const profileAge = now - context.project.createdAt
+  const profileAge = context.project.onboardingAnalysisStartedAt
+    ? now - context.project.onboardingAnalysisStartedAt
+    : 0
   const profileIsLate = profileAge > 30 * 60 * 1000
 
   const setTextField = (field: keyof ProjectIntelligenceProfile, value: string) => {
@@ -982,8 +985,7 @@ function ProjectIntelligenceTab({
               size="sm"
               onClick={() => setCompetitorUrls((current) => [...current, ""])}
               disabled={
-                competitorUrls.map((url) => url.trim()).filter(Boolean).length >=
-                context.project.limits.maxCompetitors
+                competitorUrls.length >= context.project.limits.maxCompetitors
               }
             >
               <Plus className="size-3.5" />

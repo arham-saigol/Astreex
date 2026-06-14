@@ -1,9 +1,11 @@
 "use node"
 
 import Exa from "exa-js"
+import { lookup } from "node:dns/promises"
 import { v } from "convex/values"
 import { internal } from "../_generated/api"
 import { internalAction } from "../_generated/server"
+import { assertPublicHostname, isPrivateOrInternalIp } from "../lib/publicHosts"
 
 const SUBPAGE_TARGET = [
   "pricing",
@@ -36,9 +38,19 @@ function normalizeUrl(value: string) {
   const trimmed = value.trim()
   const withProtocol = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`
   const url = new URL(withProtocol)
+  assertPublicHostname(url.hostname, "URL")
   url.hash = ""
   if (url.pathname === "/") url.pathname = ""
   return url.toString()
+}
+
+async function assertPublicResolvedHost(normalizedUrl: string) {
+  const hostname = new URL(normalizedUrl).hostname
+  assertPublicHostname(hostname, "URL")
+  const addresses = await lookup(hostname, { all: true })
+  if (addresses.some((address) => isPrivateOrInternalIp(address.address))) {
+    throw new Error("URL must resolve to a public IP address")
+  }
 }
 
 function stripHtml(html: string) {
@@ -71,6 +83,7 @@ async function fetchFallback(
   competitorIndex?: number,
 ): Promise<ProjectSourcePage> {
   const normalizedUrl = normalizeUrl(url)
+  await assertPublicResolvedHost(normalizedUrl)
   try {
     const response = await fetch(normalizedUrl, {
       headers: {
@@ -198,12 +211,12 @@ export const scrapeProjectSources = internalAction({
     )
     if (!profile) throw new Error("Project intelligence profile not found")
 
-    const own = await scrapeUrl(profile.websiteUrl, 5, "own")
-    const competitorResults = await Promise.all(
-      profile.competitorUrls.map((url, index) =>
+    const [own, ...competitorResults] = await Promise.all([
+      scrapeUrl(profile.websiteUrl, 5, "own"),
+      ...profile.competitorUrls.map((url, index) =>
         scrapeUrl(url, 3, "competitor", index),
       ),
-    )
+    ])
     const pages = [
       ...own.pages,
       ...competitorResults.flatMap((result) => result.pages),

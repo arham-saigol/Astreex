@@ -90,6 +90,9 @@ async function prepareProject(ctx: MutationCtx, args: PrepareProjectArgs) {
   if (competitorUrls.length > competitorLimit) {
     throw new Error(`Your plan supports up to ${competitorLimit} tracked competitors`)
   }
+  if (competitorUrls.some((url) => url === websiteUrl)) {
+    throw new Error("Competitor URLs cannot include your website URL")
+  }
 
   const now = Date.now()
 

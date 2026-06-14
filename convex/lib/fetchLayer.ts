@@ -142,11 +142,15 @@ export async function searchPosts(
   ctx: ActionCtx,
   args: { query: string; sort?: string; time?: string; limit?: number },
 ) {
+  const query = args.query.trim()
+  if (!query) throw new Error("Search query is required")
+  const requestedLimit = Number.isFinite(args.limit) ? Math.floor(args.limit ?? 25) : 25
+  const limit = Math.min(100, Math.max(1, requestedLimit))
   const payload = await fetchLayerJson<unknown>(ctx, "search", {
-    query: args.query,
+    query,
     sort: args.sort ?? "relevance",
     time: args.time ?? "month",
-    limit: args.limit ?? 25,
+    limit,
   })
   return arrayFromPayload<FetchLayerPost>(payload, ["posts", "results"])
 }

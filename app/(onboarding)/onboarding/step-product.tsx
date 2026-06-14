@@ -14,12 +14,6 @@ interface Props {
   onBack: () => void
 }
 
-const competitorLimits = {
-  starter: 3,
-  growth: 5,
-  scale: 10,
-}
-
 function isValidUrl(value: string): boolean {
   try {
     const url = new URL(value)
@@ -46,7 +40,6 @@ function filledCompetitorUrls(values: string[]) {
 
 export function StepProduct({ data, updateData, onNext, onBack }: Props) {
   const [errors, setErrors] = useState<{ websiteUrl?: string; competitorUrls?: string }>({})
-  const competitorLimit = competitorLimits[data.plan]
   const competitorUrls = data.competitorUrls.length > 0 ? data.competitorUrls : [""]
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -60,9 +53,7 @@ export function StepProduct({ data, updateData, onNext, onBack }: Props) {
       newErrors.websiteUrl = "Enter a valid URL (e.g. https://yourproduct.com)"
     }
 
-    if (filledCompetitors.length > competitorLimit) {
-      newErrors.competitorUrls = `Your plan supports up to ${competitorLimit} competitors`
-    } else if (filledCompetitors.some((url) => !isValidUrl(url))) {
+    if (filledCompetitors.some((url) => !isValidUrl(url))) {
       newErrors.competitorUrls = "Enter valid competitor URLs"
     } else if (new Set(filledCompetitors.map(normalizedUrlKey)).size !== filledCompetitors.length) {
       newErrors.competitorUrls = "Remove duplicate competitor URLs"
@@ -122,7 +113,7 @@ export function StepProduct({ data, updateData, onNext, onBack }: Props) {
           <div className="flex items-center justify-between gap-3">
             <Label>Competitor URLs</Label>
             <span className="text-xs text-text-tertiary">
-              {filledCompetitorUrls(data.competitorUrls).length}/{competitorLimit}
+              {filledCompetitorUrls(data.competitorUrls).length}
             </span>
           </div>
           <div className="space-y-2">
@@ -157,7 +148,6 @@ export function StepProduct({ data, updateData, onNext, onBack }: Props) {
               variant="ghost"
               size="sm"
               onClick={() => updateData({ competitorUrls: [...competitorUrls, ""] })}
-              disabled={filledCompetitorUrls(competitorUrls).length >= competitorLimit}
             >
               <Plus className="size-4" />
               Add

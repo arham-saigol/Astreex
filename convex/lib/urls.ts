@@ -1,3 +1,5 @@
+import { assertPublicHostname } from "./publicHosts"
+
 export function normalizeHttpUrl(value: string, label: string) {
   const trimmed = value.trim()
   if (!trimmed) throw new Error(`${label} is required`)
@@ -12,10 +14,17 @@ export function normalizeHttpUrl(value: string, label: string) {
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw new Error(`${label} must start with http:// or https://`)
   }
+  assertPublicHostname(url.hostname, label)
 
   url.hash = ""
   if (url.pathname === "/") url.pathname = ""
   return url.toString()
+}
+
+function dedupeKey(value: string) {
+  const url = new URL(value)
+  const port = url.port ? `:${url.port}` : ""
+  return `${url.protocol.toLowerCase()}//${url.hostname.toLowerCase()}${port}${url.pathname}${url.search}`
 }
 
 export function normalizeOptionalHttpUrls(
@@ -28,7 +37,7 @@ export function normalizeOptionalHttpUrls(
   for (const value of values ?? []) {
     if (!value.trim()) continue
     const url = normalizeHttpUrl(value, label)
-    const key = url.toLowerCase()
+    const key = dedupeKey(url)
     if (seen.has(key)) {
       throw new Error(`${label} contains duplicate URLs`)
     }

@@ -100,23 +100,41 @@ async function seedActiveAccounts(
 
 describe("billing limits", () => {
   test("getPlanLimits returns user-facing limits", () => {
-    expect(getPlanLimits("starter")).toMatchObject({
+    expect(getPlanLimits("starter")).toEqual({
       cardsPerDay: 5,
       maxSubreddits: 5,
       maxCompetitors: 3,
       maxRedditAccounts: 1,
+      maxRailBCandidates: 5,
+      shortlistCount: 10,
+      activeSubredditLimit: 5,
+      inactiveBackupLimit: 5,
+      activeScoreThreshold: 70,
+      backupScoreThreshold: 50,
     })
-    expect(getPlanLimits("growth")).toMatchObject({
+    expect(getPlanLimits("growth")).toEqual({
       cardsPerDay: 15,
       maxSubreddits: 15,
       maxCompetitors: 5,
       maxRedditAccounts: 2,
+      maxRailBCandidates: 10,
+      shortlistCount: 20,
+      activeSubredditLimit: 15,
+      inactiveBackupLimit: 5,
+      activeScoreThreshold: 70,
+      backupScoreThreshold: 50,
     })
-    expect(getPlanLimits("scale")).toMatchObject({
+    expect(getPlanLimits("scale")).toEqual({
       cardsPerDay: 40,
       maxSubreddits: 25,
       maxCompetitors: 10,
       maxRedditAccounts: 5,
+      maxRailBCandidates: 15,
+      shortlistCount: 30,
+      activeSubredditLimit: 25,
+      inactiveBackupLimit: 5,
+      activeScoreThreshold: 70,
+      backupScoreThreshold: 50,
     })
   })
 

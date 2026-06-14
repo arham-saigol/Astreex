@@ -136,16 +136,7 @@ function candidateFromCommunity(
   const name = normalizeSubredditName(displayName)
   if (!name) return null
 
-  const type = community.subredditType ?? community.type ?? "public"
-  if (
-    community.over18 ||
-    community.nsfw ||
-    community.quarantined ||
-    community.quarantine ||
-    type === "private"
-  ) {
-    return null
-  }
+  if (!communityIsAllowed(community)) return null
 
   const memberCount =
     typeof community.subscribers === "number"
@@ -162,6 +153,17 @@ function candidateFromCommunity(
     undefined
 
   return { name, rail, reason, memberCount, description }
+}
+
+function communityIsAllowed(community: FetchLayerCommunity) {
+  const type = community.subredditType ?? community.type ?? "public"
+  return !(
+    community.over18 ||
+    community.nsfw ||
+    community.quarantined ||
+    community.quarantine ||
+    type === "private"
+  )
 }
 
 function subredditFromPost(post: FetchLayerPost) {
@@ -194,8 +196,11 @@ async function collectCandidateSubreddits(
   const candidates = new Map<string, CandidateSubreddit>()
   const railBNames = new Set<string>()
 
-  for (const term of keywords) {
-    const communities = await searchCommunities(ctx, term, 10)
+  const communityResults = await mapWithConcurrency(keywords, 6, async (term) => ({
+    term,
+    communities: await searchCommunities(ctx, term, 10),
+  }))
+  for (const { term, communities } of communityResults) {
     for (const community of communities) {
       mergeCandidate(
         candidates,
@@ -205,14 +210,17 @@ async function collectCandidateSubreddits(
     if (candidates.size >= 80) break
   }
 
-  for (const term of keywords) {
-    if (railBNames.size >= maxRailBCandidates) break
-    const posts = await searchPosts(ctx, {
+  const postResults = await mapWithConcurrency(keywords, 6, async (term) => ({
+    term,
+    posts: await searchPosts(ctx, {
       query: term,
       sort: "relevance",
       time: "month",
       limit: 15,
-    })
+    }),
+  }))
+  for (const { term, posts } of postResults) {
+    if (railBNames.size >= maxRailBCandidates) break
     for (const post of posts) {
       const name = subredditFromPost(post)
       if (!name || railBNames.has(name)) continue
@@ -316,6 +324,9 @@ async function enrichAndScoreSubreddit(
   let rulesJson = ""
   try {
     details = communityFromDetails(await communityDetails(ctx, name))
+    if (!communityIsAllowed(details)) {
+      return null
+    }
     rulesJson = details.rules === undefined ? "" : stringifyRulesJson(details.rules)
   } catch {
     details = {}

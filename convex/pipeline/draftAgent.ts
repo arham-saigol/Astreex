@@ -6,6 +6,7 @@ import { z } from "zod"
 import { internal } from "../_generated/api"
 import { internalAction } from "../_generated/server"
 import { deepseekV4Pro, originalSettings, replySettings } from "../lib/ai"
+import { compactIntelligenceJson } from "./intelligenceContext"
 import type { Draft } from "./validators"
 
 const replySchema = z.object({
@@ -40,7 +41,7 @@ export const generateSingleReply = internalAction({
       prompt: [
         "Draft one helpful Reddit reply for a B2B founder.",
         "Keep it specific, conversational, and non-promotional. Do not include links unless the post explicitly asks for resources.",
-        `Project intelligence JSON: ${context.brand.intelligenceJson}`,
+        `Project intelligence JSON: ${compactIntelligenceJson(context.brand.intelligenceJson, "reply")}`,
         `Post JSON: ${JSON.stringify({
           subreddit: context.post.subreddit,
           title: context.post.title,
@@ -79,7 +80,7 @@ export const generateSingleOriginalPost = internalAction({
       prompt: [
         "Draft one original Reddit post for a B2B founder.",
         "Make it useful as a standalone community post, not an ad. Avoid links, sales language, and product announcements.",
-        `Project intelligence JSON: ${context.brand.intelligenceJson}`,
+        `Project intelligence JSON: ${compactIntelligenceJson(context.brand.intelligenceJson, "original")}`,
         `Subreddit context JSON: ${JSON.stringify(context.subreddit)}`,
       ].join("\n\n"),
     })

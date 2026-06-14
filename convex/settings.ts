@@ -9,9 +9,50 @@ import {
 import { internal } from "./_generated/api"
 import type { Id } from "./_generated/dataModel"
 import { getPlanLimits } from "./lib/planLimits"
+import { reconcileProjectIntelligenceUrls } from "./lib/projectIntelligenceReconciliation"
 import { normalizeHttpUrl, normalizeOptionalHttpUrls } from "./lib/urls"
 
 const intelligenceJsonValidator = v.string()
+const stringFields = ["overview", "positioning"] as const
+const arrayFields = [
+  "capabilities",
+  "icps",
+  "personas",
+  "painPoints",
+  "pricingAndCompetitorComparisons",
+  "whereProjectLeads",
+  "whereCompetitorsLead",
+  "weaknesses",
+  "futureAdvantages",
+  "redditUsefulAngles",
+  "avoidTopics",
+  "agentNotes",
+] as const
+
+function validateProjectIntelligenceJson(value: string) {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(value)
+  } catch {
+    throw new Error("Project intelligence must be valid JSON")
+  }
+
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error("Project intelligence must be an object")
+  }
+
+  const record = parsed as Record<string, unknown>
+  for (const field of stringFields) {
+    if (typeof record[field] !== "string") {
+      throw new Error(`Project intelligence field ${field} must be a string`)
+    }
+  }
+  for (const field of arrayFields) {
+    if (!Array.isArray(record[field]) || !record[field].every((item) => typeof item === "string")) {
+      throw new Error(`Project intelligence field ${field} must be a string array`)
+    }
+  }
+}
 
 async function getCurrentUser(ctx: QueryCtx | MutationCtx) {
   const identity = await ctx.auth.getUserIdentity()
@@ -153,6 +194,12 @@ export const getSettingsContext = query({
       .query("projectIntelligenceProfiles")
       .withIndex("by_projectId", (q) => q.eq("projectId", project._id))
       .first()
+    const runningBuild = await ctx.db
+      .query("projectIntelligenceBuilds")
+      .withIndex("by_projectId", (q) => q.eq("projectId", project._id))
+      .order("desc")
+      .take(10)
+      .then((builds) => builds.find((build) => build.status === "running"))
 
     const redditAccounts = await ctx.db
       .query("redditAccounts")
@@ -173,6 +220,7 @@ export const getSettingsContext = query({
         planStatus: project.planStatus,
         onboardingStatus: project.onboardingStatus ?? null,
         onboardingError: project.onboardingError ?? null,
+        onboardingAnalysisStartedAt: runningBuild?.startedAt ?? null,
         createdAt: project.createdAt,
         trialEndsAt: project.trialEndsAt ?? null,
         billingInterval: project.billingInterval ?? null,
@@ -229,6 +277,7 @@ export const updateProjectIntelligenceProfile = mutation({
       .first()
     if (!brand) throw new Error("Project intelligence profile not found")
 
+    validateProjectIntelligenceJson(args.intelligenceJson)
     await ctx.db.patch(brand._id, {
       intelligenceJson: args.intelligenceJson,
       updatedAt: Date.now(),
@@ -267,50 +316,14 @@ export const updateProjectIntelligenceUrls = mutation({
       updatedAt: Date.now(),
     })
 
-    const removedIndexes = new Set<number>()
-    brand.competitorUrls.forEach((url, index) => {
-      if (!competitorUrls.some((nextUrl) => nextUrl.toLowerCase() === url.toLowerCase())) {
-        removedIndexes.add(index)
-      }
+    await reconcileProjectIntelligenceUrls(ctx, {
+      projectId: args.projectId,
+      profileId: brand._id,
+      previousWebsiteUrl: brand.websiteUrl,
+      nextWebsiteUrl: websiteUrl,
+      previousCompetitorUrls: brand.competitorUrls,
+      nextCompetitorUrls: competitorUrls,
     })
-
-    if (removedIndexes.size > 0) {
-      const monitoredPages = await ctx.db
-        .query("monitoredPages")
-        .withIndex("by_projectId", (q) => q.eq("projectId", args.projectId))
-        .take(200)
-
-      for (const page of monitoredPages) {
-        if (
-          page.sourceType === "competitor" &&
-          page.competitorIndex !== undefined &&
-          removedIndexes.has(page.competitorIndex)
-        ) {
-          await ctx.db.patch(page._id, {
-            active: false,
-            updatedAt: Date.now(),
-          })
-        }
-      }
-    }
-
-    if (
-      websiteUrl !== brand.websiteUrl ||
-      competitorUrls.join("\n") !== brand.competitorUrls.join("\n")
-    ) {
-      await ctx.db.patch(brand._id, {
-        intelligenceJson: "{}",
-        updatedAt: Date.now(),
-      })
-      await ctx.db.patch(args.projectId, {
-        onboardingStatus: "running",
-        onboardingError: undefined,
-        lastActiveAt: Date.now(),
-      })
-      await ctx.scheduler.runAfter(0, internal.onboarding.pipeline.runOnboardingPipeline, {
-        projectId: args.projectId,
-      })
-    }
   },
 })
 

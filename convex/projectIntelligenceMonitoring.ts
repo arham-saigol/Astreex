@@ -181,8 +181,9 @@ export const refreshDueMonitoredPages = internalAction({
     let isDone = false
     let checked = 0
     let changed = 0
+    const deadline = now + 45_000
 
-    while (!isDone && checked < 200) {
+    while (!isDone && Date.now() < deadline) {
       const page: {
         page: Array<{
           _id: Id<"monitoredPages">
@@ -201,8 +202,43 @@ export const refreshDueMonitoredPages = internalAction({
 
       for (const monitoredPage of page.page) {
         checked++
-        const fetched = await fetchPage(monitoredPage.url)
-        if (fetched.contentHash === monitoredPage.lastContentHash) {
+        try {
+          const fetched = await fetchPage(monitoredPage.url)
+          if (fetched.contentHash === monitoredPage.lastContentHash) {
+            await ctx.runMutation(
+              internal.projectIntelligenceData.markMonitoredPageUnchanged,
+              {
+                monitoredPageId: monitoredPage._id,
+                fetchedAt: now,
+                nextCheckAt: nextWeeklyCheck(now),
+              },
+            )
+            continue
+          }
+
+          const inserted: { eventId: Id<"projectIntelligenceChangeEvents"> } =
+            await ctx.runMutation(
+              internal.projectIntelligenceData.insertChangedSnapshotAndEvent,
+              {
+                monitoredPageId: monitoredPage._id,
+                fetchedAt: now,
+                nextCheckAt: nextWeeklyCheck(now),
+                contentHash: fetched.contentHash,
+                normalizedText: fetched.normalizedText,
+                title: fetched.title ?? undefined,
+                exaId: fetched.exaId,
+              },
+            )
+          changed++
+          await ctx.runAction(
+            internal.projectIntelligenceMonitoring.evaluatePageChangeAndMaybeUpdateProfile,
+            { eventId: inserted.eventId },
+          )
+        } catch (error) {
+          console.error("Monitored page refresh failed", {
+            monitoredPageId: monitoredPage._id,
+            error: error instanceof Error ? error.message : String(error),
+          })
           await ctx.runMutation(
             internal.projectIntelligenceData.markMonitoredPageUnchanged,
             {
@@ -211,31 +247,15 @@ export const refreshDueMonitoredPages = internalAction({
               nextCheckAt: nextWeeklyCheck(now),
             },
           )
-          continue
         }
-
-        const inserted: { eventId: Id<"projectIntelligenceChangeEvents"> } =
-          await ctx.runMutation(
-            internal.projectIntelligenceData.insertChangedSnapshotAndEvent,
-            {
-              monitoredPageId: monitoredPage._id,
-              fetchedAt: now,
-              nextCheckAt: nextWeeklyCheck(now),
-              contentHash: fetched.contentHash,
-              normalizedText: fetched.normalizedText,
-              title: fetched.title ?? undefined,
-              exaId: fetched.exaId,
-            },
-          )
-        changed++
-        await ctx.runAction(
-          internal.projectIntelligenceMonitoring.evaluatePageChangeAndMaybeUpdateProfile,
-          { eventId: inserted.eventId },
-        )
       }
 
       cursor = page.continueCursor
       isDone = page.isDone
+    }
+
+    if (!isDone) {
+      await ctx.scheduler.runAfter(0, internal.projectIntelligenceMonitoring.refreshDueMonitoredPages, {})
     }
 
     return { checked, changed }

@@ -1,5 +1,6 @@
 import { v } from "convex/values"
 import { internalQuery } from "../_generated/server"
+import type { Doc } from "../_generated/dataModel"
 import { getPlanLimits } from "../lib/planLimits"
 
 export function isValidProjectIntelligenceProfile(intelligenceJson: string) {
@@ -52,9 +53,6 @@ export const getProjectReadiness = internalQuery({
         plan: project.plan,
         timezone: project.timezone,
       },
-      brand: {
-        intelligenceJson: brand.intelligenceJson,
-      },
     }
   },
 })
@@ -103,11 +101,12 @@ export const loadFilterContext = internalQuery({
       throw new Error("Project intelligence profile is missing")
     }
 
-    const posts = []
-    for (const surfacedPostId of args.surfacedPostIds) {
-      const post = await ctx.db.get(surfacedPostId)
-      if (post && post.projectId === args.projectId) posts.push(post)
-    }
+    const posts = (await Promise.all(
+      args.surfacedPostIds.map((surfacedPostId) => ctx.db.get(surfacedPostId)),
+    )).filter(
+      (post): post is Doc<"surfacedPosts"> =>
+        post !== null && post.projectId === args.projectId,
+    )
 
     return {
       project: {
@@ -229,13 +228,12 @@ export const loadJudgeContext = internalQuery({
       .order("desc")
       .take(200)
 
-    const performance = []
-    for (const row of postedRows) {
+    const performance = await Promise.all(postedRows.map(async (row) => {
       const card = await ctx.db.get(row.cardId)
       const surfacedPost = card?.surfacedPostId
         ? await ctx.db.get(card.surfacedPostId)
         : null
-      performance.push({
+      return {
         subreddit: row.subreddit,
         type: card?.type ?? null,
         title: surfacedPost?.title ?? "Original post",
@@ -243,8 +241,8 @@ export const loadJudgeContext = internalQuery({
         replyCount: row.replyCount,
         visibility: row.visibility,
         createdAt: row.createdAt,
-      })
-    }
+      }
+    }))
 
     return {
       project: {

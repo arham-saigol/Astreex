@@ -35,7 +35,6 @@ type Readiness =
   | {
       ready: true
       project: { _id: Id<"projects">; plan: Plan; timezone: string }
-      brand: { intelligenceJson: string }
     }
 
 type PipelineResult = {
