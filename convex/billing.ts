@@ -8,6 +8,7 @@ import {
 } from "./_generated/server"
 import type { Doc, Id } from "./_generated/dataModel"
 import { getPlanLimits } from "./lib/planLimits"
+import { reconcileProjectIntelligenceUrls } from "./lib/projectIntelligenceReconciliation"
 
 const planValidator = v.union(
   v.literal("starter"),
@@ -121,6 +122,26 @@ async function enforceDowngradeLimits(
 
   for (const account of excessAccounts) {
     await ctx.db.patch(account._id, { isActive: false })
+  }
+
+  const profile = await ctx.db
+    .query("projectIntelligenceProfiles")
+    .withIndex("by_projectId", (q) => q.eq("projectId", projectId))
+    .first()
+  if (profile && profile.competitorUrls.length > limits.maxCompetitors) {
+    const competitorUrls = profile.competitorUrls.slice(0, limits.maxCompetitors)
+    await ctx.db.patch(profile._id, {
+      competitorUrls,
+      updatedAt: Date.now(),
+    })
+    await reconcileProjectIntelligenceUrls(ctx, {
+      projectId,
+      profileId: profile._id,
+      previousWebsiteUrl: profile.websiteUrl,
+      nextWebsiteUrl: profile.websiteUrl,
+      previousCompetitorUrls: profile.competitorUrls,
+      nextCompetitorUrls: competitorUrls,
+    })
   }
 }
 

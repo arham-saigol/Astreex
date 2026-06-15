@@ -102,5 +102,6 @@ crons.cron("daily stale card expiration", "0 0 * * *", internal.cards.expireStal
 crons.cron("daily account health monitor", "0 22 * * *", internal.pipeline.healthMonitor.checkAccountHealth, {})
 crons.cron("daily provider health sync", "30 22 * * *", internal.pipeline.healthMonitor.syncZernioProviderHealth, {})
 crons.cron("daily stale pipeline cleanup", "0 3 * * *", internal.pipeline.cleanup.cleanupStaleData, {})
+crons.cron("weekly monitored page check", "0 4 * * 1", internal.projectIntelligenceMonitoring.refreshDueMonitoredPages, {})
 
 export default crons

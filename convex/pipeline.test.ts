@@ -9,8 +9,9 @@ import { candidatePoolSize } from "./lib/candidatePool"
 import { sanitizeJudgeSelection } from "./lib/judgeSelection"
 import { getPipelineLimits } from "./lib/planLimits"
 import { localDateAndHour } from "./crons"
-import { isValidBrandProfile } from "./pipeline/data"
+import { isValidProjectIntelligenceProfile } from "./pipeline/data"
 import { stringifyRulesJson } from "./lib/rules"
+import { fireworksKimiK26 } from "./lib/ai"
 import {
   zernioAccountId,
   zernioAccountProfileId,
@@ -30,6 +31,7 @@ function stubRequiredEnv() {
   vi.stubEnv("DEEPSEEK_API_KEY", "test")
   vi.stubEnv("ZERNIO_API_KEY", "zernio")
   vi.stubEnv("FETCHLAYER_API_KEY", "fetchlayer")
+  vi.stubEnv("FIREWORKS_API_KEY", "fireworks")
 }
 
 beforeEach(() => {
@@ -106,19 +108,37 @@ describe("pipeline helpers", () => {
       monitoredSubreddits: 5,
       trackedCompetitors: 3,
       redditAccounts: 1,
+      maxRailBCandidates: 5,
+      shortlistCount: 10,
+      activeSubredditLimit: 5,
+      inactiveBackupLimit: 5,
+      activeScoreThreshold: 70,
+      backupScoreThreshold: 50,
     })
     expect(getPipelineLimits("growth")).toMatchObject({
       cardsPerDay: 15,
       monitoredSubreddits: 15,
       trackedCompetitors: 5,
       redditAccounts: 2,
+      maxRailBCandidates: 10,
+      shortlistCount: 20,
+      activeSubredditLimit: 15,
     })
     expect(getPipelineLimits("scale")).toMatchObject({
       cardsPerDay: 40,
       monitoredSubreddits: 25,
       trackedCompetitors: 10,
       redditAccounts: 5,
+      maxRailBCandidates: 15,
+      shortlistCount: 30,
+      activeSubredditLimit: 25,
     })
+  })
+
+  test("Fireworks Kimi provider requires an API key", () => {
+    vi.stubEnv("FIREWORKS_API_KEY", "")
+
+    expect(() => fireworksKimiK26()).toThrow("FIREWORKS_API_KEY is not configured")
   })
 
   test("timezone matcher computes local date and hour", () => {
@@ -195,11 +215,11 @@ describe("pipeline helpers", () => {
     expect(selected.some((draft) => draft.type === "original")).toBe(true)
   })
 
-  test("brand profile validity rejects empty and malformed JSON", () => {
-    expect(isValidBrandProfile("{}")).toBe(false)
-    expect(isValidBrandProfile("  ")).toBe(false)
-    expect(isValidBrandProfile("[]")).toBe(false)
-    expect(isValidBrandProfile(JSON.stringify({ name: "Astreex" }))).toBe(true)
+  test("Project Intelligence Profile validity rejects empty and malformed JSON", () => {
+    expect(isValidProjectIntelligenceProfile("{}")).toBe(false)
+    expect(isValidProjectIntelligenceProfile("  ")).toBe(false)
+    expect(isValidProjectIntelligenceProfile("[]")).toBe(false)
+    expect(isValidProjectIntelligenceProfile(JSON.stringify({ name: "Astreex" }))).toBe(true)
   })
 })
 

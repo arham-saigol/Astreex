@@ -9,18 +9,49 @@ import {
 import { internal } from "./_generated/api"
 import type { Id } from "./_generated/dataModel"
 import { getPlanLimits } from "./lib/planLimits"
+import { reconcileProjectIntelligenceUrls } from "./lib/projectIntelligenceReconciliation"
+import { normalizeHttpUrl, normalizeOptionalHttpUrls } from "./lib/urls"
 
-const profileJsonValidator = v.string()
+const intelligenceJsonValidator = v.string()
+const stringFields = ["overview", "positioning"] as const
+const arrayFields = [
+  "capabilities",
+  "icps",
+  "personas",
+  "painPoints",
+  "pricingAndCompetitorComparisons",
+  "whereProjectLeads",
+  "whereCompetitorsLead",
+  "weaknesses",
+  "futureAdvantages",
+  "redditUsefulAngles",
+  "avoidTopics",
+  "agentNotes",
+] as const
 
-function trackedCompetitorCount(profileJson: string) {
-  const parsed = JSON.parse(profileJson) as unknown
-  if (typeof parsed !== "object" || parsed === null) return 0
+function validateProjectIntelligenceJson(value: string) {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(value)
+  } catch {
+    throw new Error("Project intelligence must be valid JSON")
+  }
 
-  const competitors = (parsed as Record<string, unknown>).competitors
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error("Project intelligence must be an object")
+  }
 
-  if (!Array.isArray(competitors)) return 0
-
-  return competitors.map((item) => String(item).trim()).filter(Boolean).length
+  const record = parsed as Record<string, unknown>
+  for (const field of stringFields) {
+    if (typeof record[field] !== "string") {
+      throw new Error(`Project intelligence field ${field} must be a string`)
+    }
+  }
+  for (const field of arrayFields) {
+    if (!Array.isArray(record[field]) || !record[field].every((item) => typeof item === "string")) {
+      throw new Error(`Project intelligence field ${field} must be a string array`)
+    }
+  }
 }
 
 async function getCurrentUser(ctx: QueryCtx | MutationCtx) {
@@ -67,12 +98,16 @@ async function deleteProjectRows(
   projectId: Id<"projects">,
 ) {
   const tables = [
+    "projectIntelligenceChangeEvents",
+    "monitoredPageSnapshots",
+    "monitoredPages",
+    "projectIntelligenceBuilds",
     "postedContent",
     "cards",
     "surfacedPosts",
     "subreddits",
     "redditAccounts",
-    "brands",
+    "projectIntelligenceProfiles",
   ] as const
 
   let deletedRows = 0
@@ -94,12 +129,16 @@ async function deleteProjectRows(
 
 async function hasProjectRows(ctx: MutationCtx, projectId: Id<"projects">) {
   const tables = [
+    "projectIntelligenceChangeEvents",
+    "monitoredPageSnapshots",
+    "monitoredPages",
+    "projectIntelligenceBuilds",
     "postedContent",
     "cards",
     "surfacedPosts",
     "subreddits",
     "redditAccounts",
-    "brands",
+    "projectIntelligenceProfiles",
   ] as const
 
   for (const table of tables) {
@@ -152,9 +191,15 @@ export const getSettingsContext = query({
 
     const { user, project } = current
     const brand = await ctx.db
-      .query("brands")
+      .query("projectIntelligenceProfiles")
       .withIndex("by_projectId", (q) => q.eq("projectId", project._id))
       .first()
+    const runningBuild = await ctx.db
+      .query("projectIntelligenceBuilds")
+      .withIndex("by_projectId", (q) => q.eq("projectId", project._id))
+      .order("desc")
+      .take(10)
+      .then((builds) => builds.find((build) => build.status === "running"))
 
     const redditAccounts = await ctx.db
       .query("redditAccounts")
@@ -175,6 +220,7 @@ export const getSettingsContext = query({
         planStatus: project.planStatus,
         onboardingStatus: project.onboardingStatus ?? null,
         onboardingError: project.onboardingError ?? null,
+        onboardingAnalysisStartedAt: runningBuild?.startedAt ?? null,
         createdAt: project.createdAt,
         trialEndsAt: project.trialEndsAt ?? null,
         billingInterval: project.billingInterval ?? null,
@@ -187,8 +233,8 @@ export const getSettingsContext = query({
         ? {
             _id: brand._id,
             websiteUrl: brand.websiteUrl,
-            competitorUrl: brand.competitorUrl ?? "",
-            profileJson: brand.profileJson,
+            competitorUrls: brand.competitorUrls,
+            intelligenceJson: brand.intelligenceJson,
             scrapeStatus: brand.scrapeStatus ?? null,
           }
         : null,
@@ -217,56 +263,66 @@ export const updateUserName = mutation({
   },
 })
 
-export const updateBrandProfile = mutation({
+export const updateProjectIntelligenceProfile = mutation({
   args: {
     projectId: v.id("projects"),
-    profileJson: profileJsonValidator,
+    intelligenceJson: intelligenceJsonValidator,
   },
   handler: async (ctx, args) => {
-    const project = await getOwnedProject(ctx, args.projectId)
-
-    const competitorCount = trackedCompetitorCount(args.profileJson)
-    const competitorLimit = getPlanLimits(project.plan).maxCompetitors
-    if (competitorCount > competitorLimit) {
-      throw new Error(`Your plan supports up to ${competitorLimit} tracked competitors`)
-    }
+    await getOwnedProject(ctx, args.projectId)
 
     const brand = await ctx.db
-      .query("brands")
+      .query("projectIntelligenceProfiles")
       .withIndex("by_projectId", (q) => q.eq("projectId", args.projectId))
       .first()
-    if (!brand) throw new Error("Brand not found")
+    if (!brand) throw new Error("Project intelligence profile not found")
 
+    validateProjectIntelligenceJson(args.intelligenceJson)
     await ctx.db.patch(brand._id, {
-      profileJson: args.profileJson,
+      intelligenceJson: args.intelligenceJson,
       updatedAt: Date.now(),
     })
   },
 })
 
-export const updateBrandUrls = mutation({
+export const updateProjectIntelligenceUrls = mutation({
   args: {
     projectId: v.id("projects"),
     websiteUrl: v.string(),
-    competitorUrl: v.string(),
+    competitorUrls: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args) => {
-    await getOwnedProject(ctx, args.projectId)
+    const project = await getOwnedProject(ctx, args.projectId)
 
-    const websiteUrl = args.websiteUrl.trim()
-    const competitorUrl = args.competitorUrl.trim()
-    if (!websiteUrl) throw new Error("Website URL is required")
+    const websiteUrl = normalizeHttpUrl(args.websiteUrl, "Website URL")
+    const competitorUrls = normalizeOptionalHttpUrls(
+      args.competitorUrls,
+      "Competitor URL",
+    )
+    const competitorLimit = getPlanLimits(project.plan).maxCompetitors
+    if (competitorUrls.length > competitorLimit) {
+      throw new Error(`Your plan supports up to ${competitorLimit} tracked competitors`)
+    }
 
     const brand = await ctx.db
-      .query("brands")
+      .query("projectIntelligenceProfiles")
       .withIndex("by_projectId", (q) => q.eq("projectId", args.projectId))
       .first()
-    if (!brand) throw new Error("Brand not found")
+    if (!brand) throw new Error("Project intelligence profile not found")
 
     await ctx.db.patch(brand._id, {
       websiteUrl,
-      competitorUrl,
+      competitorUrls,
       updatedAt: Date.now(),
+    })
+
+    await reconcileProjectIntelligenceUrls(ctx, {
+      projectId: args.projectId,
+      profileId: brand._id,
+      previousWebsiteUrl: brand.websiteUrl,
+      nextWebsiteUrl: websiteUrl,
+      previousCompetitorUrls: brand.competitorUrls,
+      nextCompetitorUrls: competitorUrls,
     })
   },
 })
@@ -292,7 +348,7 @@ export const retryOnboardingPipeline = mutation({
   },
 })
 
-export const reanalyzeBrandProfile = mutation({
+export const reanalyzeProjectIntelligenceProfile = mutation({
   args: {
     projectId: v.id("projects"),
   },
@@ -300,14 +356,14 @@ export const reanalyzeBrandProfile = mutation({
     await getOwnedProject(ctx, args.projectId)
 
     const brand = await ctx.db
-      .query("brands")
+      .query("projectIntelligenceProfiles")
       .withIndex("by_projectId", (q) => q.eq("projectId", args.projectId))
       .first()
-    if (!brand) throw new Error("Brand not found")
+    if (!brand) throw new Error("Project intelligence profile not found")
 
     const now = Date.now()
     await ctx.db.patch(brand._id, {
-      profileJson: "{}",
+      intelligenceJson: "{}",
       updatedAt: now,
     })
     await ctx.db.patch(args.projectId, {

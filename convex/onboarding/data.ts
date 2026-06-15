@@ -1,6 +1,5 @@
 import { v } from "convex/values"
 import { internalMutation, internalQuery } from "../_generated/server"
-import { getPlanLimits } from "../lib/planLimits"
 
 const scrapeStatusValidator = v.union(
   v.literal("complete"),
@@ -22,18 +21,17 @@ const discoveredSubredditValidator = v.object({
   active: v.boolean(),
 })
 
-function capTrackedCompetitors(profileJson: string, maxCompetitors: number) {
-  const parsed = JSON.parse(profileJson) as unknown
-  if (typeof parsed !== "object" || parsed === null) return profileJson
-
-  const competitors = (parsed as Record<string, unknown>).competitors
-  if (!Array.isArray(competitors)) return profileJson
-
-  return JSON.stringify({
-    ...parsed,
-    competitors: competitors.slice(0, maxCompetitors),
-  })
-}
+const usefulPageValidator = v.object({
+  sourceType: v.union(v.literal("own"), v.literal("competitor")),
+  competitorIndex: v.optional(v.number()),
+  url: v.string(),
+  normalizedUrl: v.string(),
+  title: v.optional(v.string()),
+  pageKind: v.optional(v.string()),
+  normalizedText: v.string(),
+  contentHash: v.string(),
+  exaId: v.optional(v.string()),
+})
 
 export const loadPipelineProject = internalQuery({
   args: {
@@ -44,13 +42,13 @@ export const loadPipelineProject = internalQuery({
   },
 })
 
-export const loadBrandForProject = internalQuery({
+export const loadProjectIntelligenceProfile = internalQuery({
   args: {
     projectId: v.id("projects"),
   },
   handler: async (ctx, args) => {
     return await ctx.db
-      .query("brands")
+      .query("projectIntelligenceProfiles")
       .withIndex("by_projectId", (q) => q.eq("projectId", args.projectId))
       .first()
   },
@@ -110,10 +108,10 @@ export const markOnboardingError = internalMutation({
   },
 })
 
-export const saveBrandProfile = internalMutation({
+export const saveProjectIntelligenceProfile = internalMutation({
   args: {
     projectId: v.id("projects"),
-    profileJson: v.string(),
+    intelligenceJson: v.string(),
     scrapeStatus: scrapeStatusValidator,
   },
   handler: async (ctx, args) => {
@@ -121,20 +119,135 @@ export const saveBrandProfile = internalMutation({
     if (!project) throw new Error("Project not found")
 
     const brand = await ctx.db
-      .query("brands")
+      .query("projectIntelligenceProfiles")
       .withIndex("by_projectId", (q) => q.eq("projectId", args.projectId))
       .first()
-    if (!brand) throw new Error("Brand not found")
-    const profileJson = capTrackedCompetitors(
-      args.profileJson,
-      getPlanLimits(project.plan).maxCompetitors,
-    )
+    if (!brand) throw new Error("Project intelligence profile not found")
 
     await ctx.db.patch(brand._id, {
-      profileJson,
+      intelligenceJson: args.intelligenceJson,
       scrapeStatus: args.scrapeStatus,
       updatedAt: Date.now(),
     })
+  },
+})
+
+export const createProjectIntelligenceBuild = internalMutation({
+  args: {
+    projectId: v.id("projects"),
+    profileId: v.id("projectIntelligenceProfiles"),
+    model: v.string(),
+    sourcePageCount: v.number(),
+  },
+  handler: async (ctx, args) => {
+    return await ctx.db.insert("projectIntelligenceBuilds", {
+      projectId: args.projectId,
+      profileId: args.profileId,
+      status: "running",
+      model: args.model,
+      sourcePageCount: args.sourcePageCount,
+      usefulPageCount: 0,
+      startedAt: Date.now(),
+    })
+  },
+})
+
+export const finishProjectIntelligenceBuild = internalMutation({
+  args: {
+    buildId: v.id("projectIntelligenceBuilds"),
+    status: v.union(v.literal("complete"), v.literal("failed")),
+    usefulPageCount: v.number(),
+    error: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.buildId, {
+      status: args.status,
+      usefulPageCount: args.usefulPageCount,
+      finishedAt: Date.now(),
+      error: args.error,
+    })
+  },
+})
+
+export const persistUsefulProjectPages = internalMutation({
+  args: {
+    projectId: v.id("projects"),
+    profileId: v.id("projectIntelligenceProfiles"),
+    pages: v.array(usefulPageValidator),
+  },
+  handler: async (ctx, args) => {
+    const now = Date.now()
+    const nextCheckAt = now + 7 * 24 * 60 * 60 * 1000
+    const incomingUrls = new Set(args.pages.map((page) => page.normalizedUrl))
+    let saved = 0
+
+    for (const page of args.pages.slice(0, 80)) {
+      const existing = await ctx.db
+        .query("monitoredPages")
+        .withIndex("by_projectId_and_normalizedUrl", (q) =>
+          q.eq("projectId", args.projectId).eq("normalizedUrl", page.normalizedUrl),
+        )
+        .first()
+
+      const pagePatch = {
+        profileId: args.profileId,
+        sourceType: page.sourceType,
+        competitorIndex: page.competitorIndex,
+        url: page.url,
+        normalizedUrl: page.normalizedUrl,
+        title: page.title,
+        pageKind: page.pageKind,
+        active: true,
+        lastFetchedAt: now,
+        nextCheckAt,
+        lastContentHash: page.contentHash,
+        updatedAt: now,
+      }
+
+      const monitoredPageId = existing
+        ? existing._id
+        : await ctx.db.insert("monitoredPages", {
+            projectId: args.projectId,
+            ...pagePatch,
+            createdAt: now,
+          })
+
+      if (existing) {
+        await ctx.db.patch(existing._id, pagePatch)
+      }
+
+      const snapshotId = await ctx.db.insert("monitoredPageSnapshots", {
+        projectId: args.projectId,
+        monitoredPageId,
+        fetchedAt: now,
+        contentHash: page.contentHash,
+        normalizedText: page.normalizedText,
+        title: page.title,
+        exaId: page.exaId,
+      })
+
+      await ctx.db.patch(monitoredPageId, {
+        lastSnapshotId: snapshotId,
+      })
+      saved++
+    }
+
+    for await (const page of ctx.db
+      .query("monitoredPages")
+      .withIndex("by_projectId", (q) => q.eq("projectId", args.projectId))) {
+      if (
+        page.profileId === args.profileId &&
+        page.active &&
+        !incomingUrls.has(page.normalizedUrl)
+      ) {
+        await ctx.db.patch(page._id, {
+          active: false,
+          updatedAt: now,
+        })
+      }
+    }
+
+    return { saved }
   },
 })
 
