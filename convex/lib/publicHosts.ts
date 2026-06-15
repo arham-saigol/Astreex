@@ -36,8 +36,7 @@ export function isPrivateOrInternalIp(value: string) {
     ipv6 === "::1" ||
     ipv6 === "::" ||
     ipv6.startsWith("fe80:") ||
-    ipv6.startsWith("fc") ||
-    ipv6.startsWith("fd")
+    /^f[cd][0-9a-f]{2}:/.test(ipv6)
   )
 }
 

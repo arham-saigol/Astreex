@@ -7,6 +7,8 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import type { OnboardingData } from "./page"
 
+const maxUrlLength = 2048
+
 interface Props {
   data: OnboardingData
   updateData: (partial: Partial<OnboardingData>) => void
@@ -28,7 +30,8 @@ function normalizedUrlKey(value: string) {
     const url = new URL(value.trim())
     url.hash = ""
     if (url.pathname === "/") url.pathname = ""
-    return url.toString().toLowerCase()
+    const port = url.port ? `:${url.port}` : ""
+    return `${url.protocol.toLowerCase()}//${url.hostname.toLowerCase()}${port}${url.pathname}${url.search}`
   } catch {
     return value.trim().toLowerCase()
   }
@@ -53,10 +56,17 @@ export function StepProduct({ data, updateData, onNext, onBack }: Props) {
       newErrors.websiteUrl = "Enter a valid URL (e.g. https://yourproduct.com)"
     }
 
-    if (filledCompetitors.some((url) => !isValidUrl(url))) {
+    if (filledCompetitors.some((url) => url.length > maxUrlLength)) {
+      newErrors.competitorUrls = "Competitor URLs must be 2048 characters or fewer"
+    } else if (filledCompetitors.some((url) => !isValidUrl(url))) {
       newErrors.competitorUrls = "Enter valid competitor URLs"
     } else if (new Set(filledCompetitors.map(normalizedUrlKey)).size !== filledCompetitors.length) {
       newErrors.competitorUrls = "Remove duplicate competitor URLs"
+    } else if (
+      isValidUrl(data.websiteUrl) &&
+      filledCompetitors.some((url) => normalizedUrlKey(url) === normalizedUrlKey(data.websiteUrl))
+    ) {
+      newErrors.competitorUrls = "Competitor URLs cannot include your website URL"
     }
 
     if (Object.keys(newErrors).length > 0) {

@@ -640,7 +640,12 @@ function ProjectIntelligenceTab({
   const [savingUrls, setSavingUrls] = useState(false)
   const [retryingPipeline, setRetryingPipeline] = useState(false)
   const [reanalyzingIntelligence, setreanalyzingIntelligence] = useState(false)
-  const [now] = useState(() => Date.now())
+  const [now, setNow] = useState(() => Date.now())
+
+  useEffect(() => {
+    const interval = window.setInterval(() => setNow(Date.now()), 60 * 1000)
+    return () => window.clearInterval(interval)
+  }, [])
 
   const profileChanged = JSON.stringify(draft) !== JSON.stringify(profile)
   const urlsChanged =
