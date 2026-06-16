@@ -13,7 +13,7 @@ const plans = [
   {
     id: "starter" as const,
     name: "Starter",
-    description: "For solo founders validating a channel.",
+    description: "For solo founders validating Reddit as a channel.",
     monthlyPrice: 29,
     annualPrice: 24,
     features: [
@@ -28,7 +28,7 @@ const plans = [
   {
     id: "growth" as const,
     name: "Growth",
-    description: "For founders scaling Reddit distribution.",
+    description: "For founders turning Reddit into a weekly motion.",
     monthlyPrice: 59,
     annualPrice: 49,
     recommended: true,
@@ -44,7 +44,7 @@ const plans = [
   {
     id: "scale" as const,
     name: "Scale",
-    description: "For teams running multi-brand campaigns.",
+    description: "For teams running multi-brand distribution.",
     monthlyPrice: 119,
     annualPrice: 99,
     features: [
@@ -67,7 +67,8 @@ export function PricingCards({
   showToggle?: boolean
   onSelect?: (plan: PricingPlan) => void
 }) {
-  const [internalInterval, setInternalInterval] = useState<PricingInterval>("monthly")
+  const [internalInterval, setInternalInterval] =
+    useState<PricingInterval>("annual")
   const activeInterval = interval ?? internalInterval
   const annual = activeInterval === "annual"
 
@@ -78,15 +79,15 @@ export function PricingCards({
   return (
     <div className="space-y-10">
       {showToggle ? (
-        <div className="flex items-center justify-center gap-3">
+        <div className="flex flex-wrap items-center justify-center gap-3">
           <button
             type="button"
             onClick={() => setInterval("monthly")}
             className={cn(
-              "rounded-lg px-4 py-2 text-sm font-medium transition-all",
+              "rounded-2xl border-2 border-[#1A1A1A] px-4 py-2 text-sm font-black transition-transform",
               !annual
-                ? "bg-surface text-text-primary shadow-sm ring-1 ring-border"
-                : "text-text-secondary hover:text-text-primary"
+                ? "bg-[#F0D7FF] text-[#1A1A1A] shadow-[3px_3px_0_#1A1A1A]"
+                : "bg-[#FFFFEB] text-[#56564B] hover:text-[#1A1A1A]"
             )}
           >
             Monthly
@@ -95,23 +96,20 @@ export function PricingCards({
             type="button"
             onClick={() => setInterval("annual")}
             className={cn(
-              "rounded-lg px-4 py-2 text-sm font-medium transition-all",
+              "rounded-2xl border-2 border-[#1A1A1A] px-4 py-2 text-sm font-black transition-transform",
               annual
-                ? "bg-surface text-text-primary shadow-sm ring-1 ring-border"
-                : "text-text-secondary hover:text-text-primary"
+                ? "bg-[#F0D7FF] text-[#1A1A1A] shadow-[3px_3px_0_#1A1A1A]"
+                : "bg-[#FFFFEB] text-[#56564B] hover:text-[#1A1A1A]"
             )}
           >
             Annual
           </button>
-          {annual && (
-            <span className="rounded-full bg-success/10 px-2.5 py-1 text-xs font-medium text-success">
-              Save ~17%
-            </span>
-          )}
+          <span className="rounded-full bg-[#034F46] px-3 py-1.5 text-xs font-black uppercase tracking-[0.14em] text-[#FFFFEB]">
+            2 months free
+          </span>
         </div>
       ) : null}
 
-      {/* Cards */}
       <div className="grid gap-6 md:grid-cols-3">
         {plans.map((plan) => {
           const price = annual ? plan.annualPrice : plan.monthlyPrice
@@ -121,36 +119,38 @@ export function PricingCards({
             <div
               key={plan.id}
               className={cn(
-                "relative flex flex-col rounded-2xl border bg-surface p-6 transition-shadow hover:shadow-lg",
+                "relative flex flex-col rounded-[2rem] border-2 border-[#1A1A1A] p-6 text-[#1A1A1A]",
                 plan.recommended
-                  ? "border-accent shadow-[0_0_0_1px_var(--accent)]"
-                  : "border-border"
+                  ? "bg-[#F0D7FF] shadow-[8px_8px_0_#1A1A1A]"
+                  : "bg-[#FFFFEB] shadow-[5px_5px_0_rgba(26,26,26,0.9)]"
               )}
             >
               {plan.recommended && (
-                <div className="absolute -top-3 left-1/2 -translate-x-1/2">
-                  <span className="rounded-full bg-accent px-3 py-1 text-xs font-medium text-accent-foreground">
-                    Recommended
+                <div className="absolute -top-4 left-1/2 -translate-x-1/2">
+                  <span className="rounded-full border-2 border-[#1A1A1A] bg-[#034F46] px-3 py-1 text-xs font-black uppercase tracking-[0.14em] text-[#FFFFEB]">
+                    Most popular
                   </span>
                 </div>
               )}
 
-              <div className="mb-6 space-y-2">
-                <h3 className="text-lg font-semibold text-text-primary">
+              <div className="mb-7 space-y-2 pt-2">
+                <h3 className="font-heading text-5xl font-medium leading-none tracking-[-0.04em]">
                   {plan.name}
                 </h3>
-                <p className="text-sm text-text-secondary">{plan.description}</p>
+                <p className="text-sm font-semibold leading-relaxed text-[#56564B]">
+                  {plan.description}
+                </p>
               </div>
 
-              <div className="mb-6">
+              <div className="mb-7 border-y-2 border-[#1A1A1A] py-5">
                 <div className="flex items-baseline gap-1">
-                  <span className="font-mono text-4xl font-bold tracking-tight text-text-primary">
+                  <span className="font-heading text-7xl font-medium leading-none tracking-[-0.05em]">
                     ${price}
                   </span>
-                  <span className="text-sm text-text-secondary">/mo</span>
+                  <span className="text-sm font-black text-[#56564B]">/mo</span>
                 </div>
                 {annual && (
-                  <p className="mt-1 text-xs text-text-tertiary">
+                  <p className="mt-1 text-xs font-bold text-[#8B8A7C]">
                     Billed ${yearlyTotal}/yr
                   </p>
                 )}
@@ -159,8 +159,10 @@ export function PricingCards({
               <ul className="mb-8 flex-1 space-y-3">
                 {plan.features.map((feature) => (
                   <li key={feature} className="flex items-start gap-2.5">
-                    <Check className="mt-0.5 size-4 shrink-0 text-accent" />
-                    <span className="text-sm text-text-secondary">{feature}</span>
+                    <Check className="mt-0.5 size-4 shrink-0 text-[#034F46]" />
+                    <span className="text-sm font-semibold text-[#56564B]">
+                      {feature}
+                    </span>
                   </li>
                 ))}
               </ul>
@@ -170,10 +172,10 @@ export function PricingCards({
                   type="button"
                   onClick={() => onSelect(plan.id)}
                   className={cn(
-                    "inline-flex h-10 items-center justify-center rounded-lg px-4 text-sm font-medium transition-colors",
+                    "inline-flex h-12 items-center justify-center rounded-2xl border-2 border-[#1A1A1A] px-4 text-sm font-black transition-transform hover:-translate-y-0.5",
                     plan.recommended
-                      ? "bg-accent text-accent-foreground hover:bg-accent-hover"
-                      : "border border-border bg-background text-text-primary hover:bg-muted"
+                      ? "bg-[#1A1A1A] text-[#FFFFEB]"
+                      : "bg-[#F0D7FF] text-[#1A1A1A]"
                   )}
                 >
                   Select {plan.name}
@@ -182,10 +184,10 @@ export function PricingCards({
                 <Link
                   href={`/sign-up?plan=${plan.id}`}
                   className={cn(
-                    "inline-flex h-10 items-center justify-center rounded-lg px-4 text-sm font-medium transition-colors",
+                    "inline-flex h-12 items-center justify-center rounded-2xl border-2 border-[#1A1A1A] px-4 text-sm font-black transition-transform hover:-translate-y-0.5",
                     plan.recommended
-                      ? "bg-accent text-accent-foreground hover:bg-accent-hover"
-                      : "border border-border bg-background text-text-primary hover:bg-muted"
+                      ? "bg-[#1A1A1A] text-[#FFFFEB]"
+                      : "bg-[#F0D7FF] text-[#1A1A1A]"
                   )}
                 >
                   Start free trial
