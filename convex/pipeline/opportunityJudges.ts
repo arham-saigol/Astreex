@@ -244,6 +244,9 @@ export const selectReplyOpportunities = internalAction({
     const validCandidates: ScoutedPost[] = candidates.filter((candidate) =>
       postsById.has(String(candidate.surfacedPostId)),
     )
+    if (validCandidates.length === 0) {
+      return { opportunities: [], shardCount: 0 }
+    }
 
     if (validCandidates.length <= limits.opportunityShardMaxPosts) {
       const opportunities = await runOpportunityJudge(
@@ -255,7 +258,7 @@ export const selectReplyOpportunities = internalAction({
         limits.replyDraftTarget,
         "max",
       )
-      return { opportunities, shardCount: validCandidates.length > 0 ? 1 : 0 }
+      return { opportunities, shardCount: 1 }
     }
 
     const shards: ScoutedPost[][] = balancedShards(

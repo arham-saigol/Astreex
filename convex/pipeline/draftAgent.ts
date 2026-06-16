@@ -62,7 +62,7 @@ export const generateSingleReply = internalAction({
           score: context.post.score,
           commentCount: context.post.commentCount,
         })}`,
-      ].join("\n\n"),
+      ].filter(Boolean).join("\n\n"),
     })
 
     return {

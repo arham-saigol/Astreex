@@ -233,13 +233,21 @@ export const runDailyPipeline = internalAction({
         return { status: "skipped", reason: "no_recent_posts", counts }
       }
 
-      const scoutResults = await Promise.all(candidateGroups.map((group) =>
+      const scoutSettlements = await Promise.allSettled(candidateGroups.map((group) =>
         ctx.runAction(internal.pipeline.subredditScout.runSubredditScout, {
           projectId: args.projectId,
           subreddit: group.subreddit,
           candidates: group.candidates,
         }),
       ))
+      const scoutResults = scoutSettlements
+        .filter((result): result is PromiseFulfilledResult<ScoutedPost[]> =>
+          result.status === "fulfilled",
+        )
+        .map((result) => result.value)
+      if (scoutResults.length === 0) {
+        throw new Error("All subreddit scout actions failed")
+      }
       const scoutedPosts: ScoutedPost[] = scoutResults.flat()
       counts.scoutedPosts = scoutedPosts.length
 
@@ -334,7 +342,7 @@ export const runDailyPipeline = internalAction({
       )
       counts.createdCards = created.created
 
-      if (created.created === 0) {
+      if (created.skipped) {
         await ctx.runMutation(
           internal.pipeline.orchestrator.markPipelineRunSkipped,
           {

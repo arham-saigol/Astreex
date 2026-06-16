@@ -153,7 +153,7 @@ export const selectFinalReplies = internalAction({
       ...deepseekHighReasoningOptions,
       schema: notesSchema,
       prompt: [
-        "Advise the final selector on the best 32 reply cards for today.",
+        `Advise the final selector on the best ${targetCount} reply cards for today.`,
         "Favor high-opportunity replies, coverage across communities, and low risk of sounding promotional.",
         `Consolidator notes: ${consolidator.object.notes}`,
         `Last 7 days performance JSON: ${JSON.stringify(context.performance)}`,

@@ -41,6 +41,12 @@ function fallbackCandidates(candidates: SurfacedPostCandidate[]) {
   })
 }
 
+function normalizeSubredditName(name: string) {
+  const normalized = name.replace(/^r\//i, "").trim().toLowerCase()
+  if (!/^[a-z0-9_]{3,21}$/.test(normalized)) return null
+  return normalized
+}
+
 export function sanitizeScoutOutput(
   ranked: Array<{ surfacedPostId: string; reason?: string }>,
   candidates: SurfacedPostCandidate[],
@@ -89,17 +95,23 @@ export const runSubredditScout = internalAction({
   },
   returns: v.array(scoutedPostValidator),
   handler: async (ctx, args): Promise<ScoutedPost[]> => {
-    if (args.candidates.length === 0) return []
+    const subreddit = normalizeSubredditName(args.subreddit)
+    if (!subreddit) return []
+
+    const candidates = args.candidates.filter(
+      (candidate) => normalizeSubredditName(candidate.subreddit) === subreddit,
+    )
+    if (candidates.length === 0) return []
 
     const context = await ctx.runQuery(
       internal.pipeline.data.loadReplyPipelineContext,
       {
         projectId: args.projectId,
-        surfacedPostIds: args.candidates.map((candidate) => candidate.surfacedPostId),
+        surfacedPostIds: candidates.map((candidate) => candidate.surfacedPostId),
       },
     )
     const limits = getPipelineLimits(context.project.plan)
-    const promptPosts = args.candidates.map((post) => ({
+    const promptPosts = candidates.map((post) => ({
       surfacedPostId: post.surfacedPostId,
       redditPostId: post.redditPostId,
       subreddit: post.subreddit,
@@ -117,7 +129,7 @@ export const runSubredditScout = internalAction({
       ...deepseekHighReasoningOptions,
       schema: scoutSchema,
       prompt: [
-        `Scout r/${args.subreddit} for strong reply opportunities for a B2B founder.`,
+        `Scout r/${subreddit} for strong reply opportunities for a B2B founder.`,
         "Return post IDs that are specific, recent, discussion-worthy, and likely to benefit from a helpful non-promotional reply.",
         "Avoid memes, thin announcements, ragebait, and posts where a brand reply would feel intrusive.",
         `Return up to ${limits.maxScoutPostsPerSubreddit} surfacedPostId values from the candidates.`,
@@ -128,7 +140,7 @@ export const runSubredditScout = internalAction({
 
     return sanitizeScoutOutput(
       result.object.ranked,
-      args.candidates,
+      candidates,
       limits.maxScoutPostsPerSubreddit,
     )
   },

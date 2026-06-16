@@ -1,6 +1,6 @@
 import { v } from "convex/values"
 import { internalMutation, type MutationCtx } from "../_generated/server"
-import type { Id } from "../_generated/dataModel"
+import type { Doc, Id } from "../_generated/dataModel"
 import {
   draftValidator,
   replyDraftValidator,
@@ -44,18 +44,24 @@ function replyDraftKey(draft: ReplyDraft) {
 }
 
 async function healthyAccounts(ctx: MutationCtx, projectId: Id<"projects">) {
-  const accounts = await ctx.db
+  const accounts = ctx.db
     .query("redditAccounts")
     .withIndex("by_projectId", (q) => q.eq("projectId", projectId))
-    .take(50)
+  const healthy: Array<Doc<"redditAccounts">> = []
 
-  return accounts.filter(
-    (account) =>
+  for await (const account of accounts) {
+    if (
       account.isActive &&
       account.healthStatus === "healthy" &&
       account.providerCanPost !== false &&
-      account.providerNeedsReconnect !== true,
-  )
+      account.providerNeedsReconnect !== true
+    ) {
+      healthy.push(account)
+      if (healthy.length >= 50) break
+    }
+  }
+
+  return healthy
 }
 
 export const createDailyCards = internalMutation({
@@ -141,6 +147,11 @@ export const createDailyReplyCards = internalMutation({
     selectedDrafts: v.array(replyDraftValidator),
   },
   handler: async (ctx, args) => {
+    const pipelineRun = await ctx.db.get(args.runId)
+    if (!pipelineRun || pipelineRun.projectId !== args.projectId) {
+      return { created: 0, skipped: false }
+    }
+
     const activeAccounts = await healthyAccounts(ctx, args.projectId)
 
     if (activeAccounts.length === 0) {
@@ -150,7 +161,7 @@ export const createDailyReplyCards = internalMutation({
     const now = Date.now()
     let created = 0
 
-    for (const [index, draft] of args.selectedDrafts.entries()) {
+    for (const draft of args.selectedDrafts) {
       const key = replyDraftKey(draft)
       const existing = await ctx.db
         .query("cards")
@@ -163,7 +174,10 @@ export const createDailyReplyCards = internalMutation({
         .first()
       if (existing) continue
 
-      const redditAccount = activeAccounts[index % activeAccounts.length]
+      const surfacedPost = await ctx.db.get(draft.surfacedPostId)
+      if (!surfacedPost || surfacedPost.projectId !== args.projectId) continue
+
+      const redditAccount = activeAccounts[created % activeAccounts.length]
 
       await ctx.db.insert("cards", {
         projectId: args.projectId,

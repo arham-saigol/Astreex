@@ -258,9 +258,9 @@ export const loadRecentUncardedCandidates = internalQuery({
           .withIndex("by_projectId_and_surfacedPostId", (q) =>
             q.eq("projectId", args.projectId).eq("surfacedPostId", post._id),
           )
-          .take(1)
+          .first()
 
-        if (existingCard.length > 0) continue
+        if (existingCard) continue
 
         candidates.push({
           surfacedPostId: post._id,
