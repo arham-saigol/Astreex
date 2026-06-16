@@ -351,6 +351,12 @@ export default defineSchema({
       drafts: v.optional(v.number()),
       selectedCards: v.optional(v.number()),
       createdCards: v.optional(v.number()),
+      originalSignals: v.optional(v.number()),
+      originalThemes: v.optional(v.number()),
+      originalDrafts: v.optional(v.number()),
+      selectedOriginals: v.optional(v.number()),
+      originalRewrites: v.optional(v.number()),
+      createdOriginalCards: v.optional(v.number()),
     })),
   }).index("by_projectId_and_localDate", ["projectId", "localDate"]),
 })

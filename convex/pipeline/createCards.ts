@@ -3,8 +3,10 @@ import { internalMutation, type MutationCtx } from "../_generated/server"
 import type { Doc, Id } from "../_generated/dataModel"
 import {
   draftValidator,
+  originalDraftValidator,
   replyDraftValidator,
   type Draft,
+  type OriginalDraft,
   type ReplyDraft,
 } from "./validators"
 
@@ -40,6 +42,16 @@ function replyDraftKey(draft: ReplyDraft) {
     surfacedPostId: draft.surfacedPostId,
     targetSubreddit: draft.targetSubreddit,
     draftContent: draft.draftContent,
+  }))
+}
+
+function originalDraftKey(draft: OriginalDraft) {
+  return stableHash(JSON.stringify({
+    type: draft.type,
+    targetSubreddit: draft.targetSubreddit,
+    title: draft.title,
+    body: draft.body,
+    briefId: draft.briefId,
   }))
 }
 
@@ -184,6 +196,62 @@ export const createDailyReplyCards = internalMutation({
         surfacedPostId: draft.surfacedPostId,
         redditAccountId: redditAccount._id,
         type: "reply",
+        targetSubreddit: draft.targetSubreddit,
+        draftContent: draft.draftContent,
+        status: "pending",
+        pipelineRunId: args.runId,
+        draftKey: key,
+        createdAt: now,
+      })
+
+      created++
+    }
+
+    return { created, skipped: false }
+  },
+})
+
+export const createDailyOriginalCards = internalMutation({
+  args: {
+    projectId: v.id("projects"),
+    runId: v.id("pipelineRuns"),
+    selectedDrafts: v.array(originalDraftValidator),
+  },
+  handler: async (ctx, args) => {
+    const pipelineRun = await ctx.db.get(args.runId)
+    if (!pipelineRun || pipelineRun.projectId !== args.projectId) {
+      return { created: 0, skipped: false }
+    }
+
+    const activeAccounts = await healthyAccounts(ctx, args.projectId)
+
+    if (activeAccounts.length === 0) {
+      return { created: 0, skipped: true }
+    }
+
+    const now = Date.now()
+    let created = 0
+
+    for (const draft of args.selectedDrafts) {
+      const key = originalDraftKey(draft)
+      const existing = await ctx.db
+        .query("cards")
+        .withIndex("by_projectId_and_pipelineRunId_and_draftKey", (q) =>
+          q
+            .eq("projectId", args.projectId)
+            .eq("pipelineRunId", args.runId)
+            .eq("draftKey", key),
+        )
+        .first()
+      if (existing) continue
+
+      const redditAccount = activeAccounts[created % activeAccounts.length]
+
+      await ctx.db.insert("cards", {
+        projectId: args.projectId,
+        surfacedPostId: null,
+        redditAccountId: redditAccount._id,
+        type: "original",
         targetSubreddit: draft.targetSubreddit,
         draftContent: draft.draftContent,
         status: "pending",

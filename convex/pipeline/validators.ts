@@ -86,15 +86,57 @@ export const replyDraftValidator = v.object({
   opportunityRationale: v.optional(v.string()),
 })
 
+export const originalSignalValidator = v.object({
+  signalId: v.string(),
+  subreddit: v.string(),
+  sourceId: v.string(),
+  sourceType: v.union(v.literal("post"), v.literal("comment")),
+  sourceTitle: v.optional(v.string()),
+  sourceExcerpt: v.optional(v.string()),
+  painPoint: v.string(),
+  whyItMatters: v.string(),
+  possiblePostDirection: v.string(),
+})
+
+export const originalThemeValidator = v.object({
+  themeId: v.string(),
+  title: v.string(),
+  summary: v.string(),
+  signalIds: v.array(v.string()),
+  targetSubreddits: v.array(v.string()),
+})
+
+export const originalPostBriefValidator = v.object({
+  briefId: v.string(),
+  targetSubreddit: v.string(),
+  titleAngle: v.string(),
+  bodyDirection: v.string(),
+  rationale: v.optional(v.string()),
+  signalIds: v.optional(v.array(v.string())),
+  themeId: v.optional(v.string()),
+})
+
+export const originalDraftValidator = v.object({
+  type: v.literal("original"),
+  targetSubreddit: v.string(),
+  title: v.string(),
+  body: v.string(),
+  draftContent: v.string(),
+  briefId: v.optional(v.string()),
+  rationale: v.optional(v.string()),
+})
+
+export const originalDraftJudgeDecisionValidator = v.object({
+  draftId: v.string(),
+  approved: v.boolean(),
+  reason: v.optional(v.string()),
+  rewriteInstructions: v.optional(v.string()),
+  score: v.optional(v.number()),
+})
+
 export const draftValidator = v.union(
   replyDraftValidator,
-  v.object({
-    type: v.literal("original"),
-    targetSubreddit: v.string(),
-    title: v.string(),
-    body: v.string(),
-    draftContent: v.string(),
-  }),
+  originalDraftValidator,
 )
 
 export type ReplyDraft = {
@@ -106,12 +148,52 @@ export type ReplyDraft = {
   opportunityRationale?: string
 }
 
+export type OriginalSignal = {
+  signalId: string
+  subreddit: string
+  sourceId: string
+  sourceType: "post" | "comment"
+  sourceTitle?: string
+  sourceExcerpt?: string
+  painPoint: string
+  whyItMatters: string
+  possiblePostDirection: string
+}
+
+export type OriginalTheme = {
+  themeId: string
+  title: string
+  summary: string
+  signalIds: string[]
+  targetSubreddits: string[]
+}
+
+export type OriginalPostBrief = {
+  briefId: string
+  targetSubreddit: string
+  titleAngle: string
+  bodyDirection: string
+  rationale?: string
+  signalIds?: string[]
+  themeId?: string
+}
+
 export type OriginalDraft = {
   type: "original"
   targetSubreddit: string
   title: string
   body: string
   draftContent: string
+  briefId?: string
+  rationale?: string
+}
+
+export type OriginalDraftJudgeDecision = {
+  draftId: string
+  approved: boolean
+  reason?: string
+  rewriteInstructions?: string
+  score?: number
 }
 
 export type Draft = ReplyDraft | OriginalDraft

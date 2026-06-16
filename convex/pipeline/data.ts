@@ -1,6 +1,6 @@
 import { v } from "convex/values"
 import { internalQuery } from "../_generated/server"
-import type { Doc } from "../_generated/dataModel"
+import type { Doc, Id } from "../_generated/dataModel"
 import { getPipelineLimits, getPlanLimits } from "../lib/planLimits"
 
 const RECENT_CANDIDATE_WINDOW_MS = 48 * 60 * 60 * 1000
@@ -314,6 +314,117 @@ export const loadReplyPipelineContext = internalQuery({
         intelligenceJson: brand.intelligenceJson,
       },
       posts,
+    }
+  },
+})
+
+export const loadOriginalPipelineContext = internalQuery({
+  args: {
+    projectId: v.id("projects"),
+  },
+  handler: async (ctx, args) => {
+    const project = await ctx.db.get(args.projectId)
+    if (!project) throw new Error("Project not found")
+
+    const brand = await ctx.db
+      .query("projectIntelligenceProfiles")
+      .withIndex("by_projectId", (q) => q.eq("projectId", args.projectId))
+      .first()
+    if (!brand || !isValidProjectIntelligenceProfile(brand.intelligenceJson)) {
+      throw new Error("Project intelligence profile is missing")
+    }
+
+    const limits = getPipelineLimits(project.plan)
+    const activeSubreddits = (await ctx.db
+      .query("subreddits")
+      .withIndex("by_projectId_active", (q) =>
+        q.eq("projectId", args.projectId).eq("active", true),
+      )
+      .take(100))
+      .sort((a, b) => {
+        if (a.relevanceScore !== b.relevanceScore) {
+          return b.relevanceScore - a.relevanceScore
+        }
+        return a._creationTime - b._creationTime
+      })
+      .slice(0, limits.activeSubredditLimit)
+
+    const cutoff = Date.now() - 14 * 24 * 60 * 60 * 1000
+    const recentPosts: Array<{
+      _id: Id<"surfacedPosts">
+      redditPostId: string
+      subreddit: string
+      title: string
+      selftext?: string
+      url: string
+      score: number
+      commentCount: number
+      postedAt: number
+    }> = []
+
+    for (const subreddit of activeSubreddits) {
+      const posts = await ctx.db
+        .query("surfacedPosts")
+        .withIndex("by_projectId_and_subreddit_and_postedAt", (q) =>
+          q
+            .eq("projectId", args.projectId)
+            .eq("subreddit", normalizeSubredditName(subreddit.name))
+            .gte("postedAt", cutoff),
+        )
+        .order("desc")
+        .take(10)
+
+      recentPosts.push(...posts.map((post) => ({
+        _id: post._id,
+        redditPostId: post.redditPostId,
+        subreddit: post.subreddit,
+        title: post.title,
+        selftext: post.selftext,
+        url: post.url,
+        score: post.score,
+        commentCount: post.commentCount,
+        postedAt: post.postedAt,
+      })))
+    }
+
+    const postedSince = Date.now() - 14 * 24 * 60 * 60 * 1000
+    const postedRows = await ctx.db
+      .query("postedContent")
+      .withIndex("by_projectId_and_createdAt", (q) =>
+        q.eq("projectId", args.projectId).gte("createdAt", postedSince),
+      )
+      .order("desc")
+      .take(100)
+
+    const performance = await Promise.all(postedRows.map(async (row) => {
+      const card = await ctx.db.get(row.cardId)
+      return {
+        subreddit: row.subreddit,
+        type: card?.type ?? null,
+        score: row.score,
+        replyCount: row.replyCount,
+        visibility: row.visibility,
+        createdAt: row.createdAt,
+      }
+    }))
+
+    return {
+      project: {
+        plan: project.plan,
+      },
+      brand: {
+        intelligenceJson: brand.intelligenceJson,
+      },
+      subreddits: activeSubreddits.map((subreddit) => ({
+        name: normalizeSubredditName(subreddit.name),
+        memberCount: subreddit.memberCount ?? null,
+        description: subreddit.description ?? null,
+        rulesJson: subreddit.rulesJson ?? null,
+        relevanceScore: subreddit.relevanceScore,
+        reasoning: subreddit.reasoning,
+      })),
+      recentPosts,
+      performance,
     }
   },
 })
