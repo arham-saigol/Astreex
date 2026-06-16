@@ -2,6 +2,11 @@ export type Plan = "starter" | "growth" | "scale"
 
 export type PipelineLimits = {
   cardsPerDay: number
+  replyCardsPerDay: number
+  replyDraftTarget: number
+  originalCardsPerDay: number
+  maxScoutPostsPerSubreddit: number
+  opportunityShardMaxPosts: number
   replyDrafts: number
   originalDrafts: number
   minOriginals: number
@@ -20,7 +25,12 @@ export type PipelineLimits = {
 const LIMITS: Record<Plan, PipelineLimits> = {
   starter: {
     cardsPerDay: 5,
-    replyDrafts: 5,
+    replyCardsPerDay: 4,
+    replyDraftTarget: 6,
+    originalCardsPerDay: 1,
+    maxScoutPostsPerSubreddit: 15,
+    opportunityShardMaxPosts: 35,
+    replyDrafts: 6,
     originalDrafts: 1,
     minOriginals: 1,
     filterTop: 20,
@@ -36,9 +46,14 @@ const LIMITS: Record<Plan, PipelineLimits> = {
   },
   growth: {
     cardsPerDay: 15,
-    replyDrafts: 15,
-    originalDrafts: 2,
-    minOriginals: 2,
+    replyCardsPerDay: 12,
+    replyDraftTarget: 18,
+    originalCardsPerDay: 3,
+    maxScoutPostsPerSubreddit: 15,
+    opportunityShardMaxPosts: 35,
+    replyDrafts: 18,
+    originalDrafts: 3,
+    minOriginals: 3,
     filterTop: 60,
     monitoredSubreddits: 15,
     trackedCompetitors: 5,
@@ -52,9 +67,14 @@ const LIMITS: Record<Plan, PipelineLimits> = {
   },
   scale: {
     cardsPerDay: 40,
+    replyCardsPerDay: 32,
+    replyDraftTarget: 40,
+    originalCardsPerDay: 8,
+    maxScoutPostsPerSubreddit: 15,
+    opportunityShardMaxPosts: 35,
     replyDrafts: 40,
-    originalDrafts: 5,
-    minOriginals: 3,
+    originalDrafts: 8,
+    minOriginals: 8,
     filterTop: 120,
     monitoredSubreddits: 25,
     trackedCompetitors: 10,

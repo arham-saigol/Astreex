@@ -228,6 +228,11 @@ export default defineSchema({
   })
     .index("by_projectId", ["projectId"])
     .index("by_projectId_redditPostId", ["projectId", "redditPostId"])
+    .index("by_projectId_and_subreddit_and_postedAt", [
+      "projectId",
+      "subreddit",
+      "postedAt",
+    ])
     .index("by_surfacedAt", ["surfacedAt"]),
 
   cards: defineTable({
@@ -336,6 +341,12 @@ export default defineSchema({
     counts: v.optional(v.object({
       fetchedPosts: v.optional(v.number()),
       newPosts: v.optional(v.number()),
+      storedPosts: v.optional(v.number()),
+      scoutedPosts: v.optional(v.number()),
+      opportunityShards: v.optional(v.number()),
+      replyOpportunities: v.optional(v.number()),
+      replyDrafts: v.optional(v.number()),
+      selectedReplies: v.optional(v.number()),
       filteredPosts: v.optional(v.number()),
       drafts: v.optional(v.number()),
       selectedCards: v.optional(v.number()),

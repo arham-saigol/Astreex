@@ -27,13 +27,67 @@ export type FetchedPost = {
   createdUtc: number
 }
 
+export const surfacedPostCandidateValidator = v.object({
+  surfacedPostId: v.id("surfacedPosts"),
+  redditPostId: v.string(),
+  subreddit: v.string(),
+  title: v.string(),
+  selftext: v.optional(v.string()),
+  url: v.string(),
+  score: v.number(),
+  commentCount: v.number(),
+  postedAt: v.number(),
+})
+
+export type SurfacedPostCandidate = {
+  surfacedPostId: Id<"surfacedPosts">
+  redditPostId: string
+  subreddit: string
+  title: string
+  selftext?: string
+  url: string
+  score: number
+  commentCount: number
+  postedAt: number
+}
+
+export const scoutedPostValidator = v.object({
+  surfacedPostId: v.id("surfacedPosts"),
+  subreddit: v.string(),
+  scoutRationale: v.optional(v.string()),
+})
+
+export type ScoutedPost = {
+  surfacedPostId: Id<"surfacedPosts">
+  subreddit: string
+  scoutRationale?: string
+}
+
+export const replyOpportunityValidator = v.object({
+  surfacedPostId: v.id("surfacedPosts"),
+  targetSubreddit: v.string(),
+  scoutRationale: v.optional(v.string()),
+  opportunityRationale: v.optional(v.string()),
+})
+
+export type ReplyOpportunity = {
+  surfacedPostId: Id<"surfacedPosts">
+  targetSubreddit: string
+  scoutRationale?: string
+  opportunityRationale?: string
+}
+
+export const replyDraftValidator = v.object({
+  type: v.literal("reply"),
+  surfacedPostId: v.id("surfacedPosts"),
+  targetSubreddit: v.string(),
+  draftContent: v.string(),
+  scoutRationale: v.optional(v.string()),
+  opportunityRationale: v.optional(v.string()),
+})
+
 export const draftValidator = v.union(
-  v.object({
-    type: v.literal("reply"),
-    surfacedPostId: v.id("surfacedPosts"),
-    targetSubreddit: v.string(),
-    draftContent: v.string(),
-  }),
+  replyDraftValidator,
   v.object({
     type: v.literal("original"),
     targetSubreddit: v.string(),
@@ -48,6 +102,8 @@ export type ReplyDraft = {
   surfacedPostId: Id<"surfacedPosts">
   targetSubreddit: string
   draftContent: string
+  scoutRationale?: string
+  opportunityRationale?: string
 }
 
 export type OriginalDraft = {

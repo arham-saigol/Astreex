@@ -5,9 +5,14 @@ import { v } from "convex/values"
 import { z } from "zod"
 import { internal } from "../_generated/api"
 import { internalAction } from "../_generated/server"
-import { deepseekV4Pro, originalSettings, replySettings } from "../lib/ai"
+import {
+  deepseekHighReasoningOptions,
+  deepseekV4Pro,
+  originalSettings,
+  replySettings,
+} from "../lib/ai"
 import { compactIntelligenceJson } from "./intelligenceContext"
-import type { Draft } from "./validators"
+import type { Draft, ReplyDraft } from "./validators"
 
 const replySchema = z.object({
   reply: z.string().min(1).refine((value) => value.trim().length > 0),
@@ -27,8 +32,10 @@ export const generateSingleReply = internalAction({
   args: {
     projectId: v.id("projects"),
     surfacedPostId: v.id("surfacedPosts"),
+    scoutRationale: v.optional(v.string()),
+    opportunityRationale: v.optional(v.string()),
   },
-  handler: async (ctx, args): Promise<Draft> => {
+  handler: async (ctx, args): Promise<ReplyDraft> => {
     const context = await ctx.runQuery(
       internal.pipeline.data.loadReplyDraftContext,
       args,
@@ -37,10 +44,15 @@ export const generateSingleReply = internalAction({
     const result = await generateObject({
       model: deepseekV4Pro(),
       ...replySettings,
+      ...deepseekHighReasoningOptions,
       schema: replySchema,
       prompt: [
         "Draft one helpful Reddit reply for a B2B founder.",
         "Keep it specific, conversational, and non-promotional. Do not include links unless the post explicitly asks for resources.",
+        args.scoutRationale ? `Scout rationale: ${args.scoutRationale}` : "",
+        args.opportunityRationale
+          ? `Opportunity rationale: ${args.opportunityRationale}`
+          : "",
         `Project intelligence JSON: ${compactIntelligenceJson(context.brand.intelligenceJson, "reply")}`,
         `Post JSON: ${JSON.stringify({
           subreddit: context.post.subreddit,
@@ -50,7 +62,7 @@ export const generateSingleReply = internalAction({
           score: context.post.score,
           commentCount: context.post.commentCount,
         })}`,
-      ].join("\n\n"),
+      ].filter(Boolean).join("\n\n"),
     })
 
     return {
@@ -58,6 +70,8 @@ export const generateSingleReply = internalAction({
       surfacedPostId: args.surfacedPostId,
       targetSubreddit: context.post.subreddit,
       draftContent: result.object.reply.trim(),
+      scoutRationale: args.scoutRationale,
+      opportunityRationale: args.opportunityRationale,
     }
   },
 })

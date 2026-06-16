@@ -8,6 +8,16 @@ import schema from "./schema"
 import { candidatePoolSize } from "./lib/candidatePool"
 import { sanitizeJudgeSelection } from "./lib/judgeSelection"
 import { getPipelineLimits } from "./lib/planLimits"
+import { sanitizeScoutOutput } from "./pipeline/subredditScout"
+import {
+  balancedShards,
+  sanitizeOpportunityMerge,
+  shardReturnCount,
+} from "./pipeline/opportunityJudges"
+import {
+  replySelectionPath,
+  sanitizeReplySelection,
+} from "./pipeline/replySelectionAgent"
 import { localDateAndHour } from "./crons"
 import { isValidProjectIntelligenceProfile } from "./pipeline/data"
 import { stringifyRulesJson } from "./lib/rules"
@@ -105,6 +115,11 @@ describe("pipeline helpers", () => {
   test("plan limits match app sizing", () => {
     expect(getPipelineLimits("starter")).toMatchObject({
       cardsPerDay: 5,
+      replyCardsPerDay: 4,
+      replyDraftTarget: 6,
+      originalCardsPerDay: 1,
+      maxScoutPostsPerSubreddit: 15,
+      opportunityShardMaxPosts: 35,
       monitoredSubreddits: 5,
       trackedCompetitors: 3,
       redditAccounts: 1,
@@ -117,6 +132,11 @@ describe("pipeline helpers", () => {
     })
     expect(getPipelineLimits("growth")).toMatchObject({
       cardsPerDay: 15,
+      replyCardsPerDay: 12,
+      replyDraftTarget: 18,
+      originalCardsPerDay: 3,
+      maxScoutPostsPerSubreddit: 15,
+      opportunityShardMaxPosts: 35,
       monitoredSubreddits: 15,
       trackedCompetitors: 5,
       redditAccounts: 2,
@@ -126,6 +146,11 @@ describe("pipeline helpers", () => {
     })
     expect(getPipelineLimits("scale")).toMatchObject({
       cardsPerDay: 40,
+      replyCardsPerDay: 32,
+      replyDraftTarget: 40,
+      originalCardsPerDay: 8,
+      maxScoutPostsPerSubreddit: 15,
+      opportunityShardMaxPosts: 35,
       monitoredSubreddits: 25,
       trackedCompetitors: 10,
       redditAccounts: 5,
@@ -213,6 +238,91 @@ describe("pipeline helpers", () => {
 
     expect(selected).toHaveLength(2)
     expect(selected.some((draft) => draft.type === "original")).toBe(true)
+  })
+
+  test("scout output sanitization caps at 15 per subreddit", () => {
+    const candidates = Array.from({ length: 20 }, (_, index) => ({
+      surfacedPostId: `post_${index}` as Id<"surfacedPosts">,
+      redditPostId: `reddit_${index}`,
+      subreddit: "saas",
+      title: `Post ${index}`,
+      url: `https://reddit.com/${index}`,
+      score: index,
+      commentCount: index,
+      postedAt: Date.now() - index,
+    }))
+
+    const selected = sanitizeScoutOutput(
+      [
+        { surfacedPostId: "missing", reason: "bad" },
+        { surfacedPostId: "post_1", reason: "good" },
+        { surfacedPostId: "post_1", reason: "duplicate" },
+        ...candidates.map((candidate) => ({
+          surfacedPostId: candidate.surfacedPostId,
+        })),
+      ],
+      candidates,
+      15,
+    )
+
+    expect(selected).toHaveLength(15)
+    expect(new Set(selected.map((post) => post.surfacedPostId)).size).toBe(15)
+    expect(selected[0]).toMatchObject({
+      surfacedPostId: "post_1",
+      scoutRationale: "good",
+    })
+  })
+
+  test("opportunity sharding is balanced and computes shard return counts", () => {
+    const shards = balancedShards(Array.from({ length: 80 }, (_, index) => index), 35)
+    const sizes = shards.map((shard) => shard.length)
+
+    expect(shards).toHaveLength(3)
+    expect(Math.max(...sizes)).toBeLessThanOrEqual(35)
+    expect(Math.max(...sizes) - Math.min(...sizes)).toBeLessThanOrEqual(1)
+    expect(shardReturnCount(40, shards.length, shards[0].length)).toBe(27)
+  })
+
+  test("opportunity merge returns unique posts with deterministic fallback", () => {
+    const candidates = ["a", "b", "c", "d"].map((id) => ({
+      surfacedPostId: id as Id<"surfacedPosts">,
+      targetSubreddit: "saas",
+      opportunityRationale: id,
+    }))
+
+    const selected = sanitizeOpportunityMerge(
+      candidates,
+      ["missing", "b", "b", "a"],
+      3,
+    )
+
+    expect(selected.map((post) => post.surfacedPostId)).toEqual(["b", "a", "c"])
+  })
+
+  test("starter and growth final reply selection use the single path and return plan counts", () => {
+    const drafts = Array.from({ length: 18 }, (_, index) => ({
+      type: "reply" as const,
+      surfacedPostId: `reply_${index}` as Id<"surfacedPosts">,
+      targetSubreddit: index % 2 === 0 ? "saas" : "startups",
+      draftContent: `Reply ${index}`,
+    }))
+
+    expect(replySelectionPath("starter")).toBe("single")
+    expect(replySelectionPath("growth")).toBe("single")
+    expect(sanitizeReplySelection(drafts, [99, 0, 0, 1], 4)).toHaveLength(4)
+    expect(sanitizeReplySelection(drafts, [99, 0, 0, 1], 12)).toHaveLength(12)
+  })
+
+  test("scale final reply selection uses the scale path and returns 32 replies", () => {
+    const drafts = Array.from({ length: 40 }, (_, index) => ({
+      type: "reply" as const,
+      surfacedPostId: `reply_${index}` as Id<"surfacedPosts">,
+      targetSubreddit: `subreddit_${index % 8}`,
+      draftContent: `Reply ${index}`,
+    }))
+
+    expect(replySelectionPath("scale")).toBe("scale")
+    expect(sanitizeReplySelection(drafts, [], 32)).toHaveLength(32)
   })
 
   test("Project Intelligence Profile validity rejects empty and malformed JSON", () => {
@@ -316,7 +426,7 @@ describe("pipeline Convex mutations", () => {
     expect(secondInsert).toHaveLength(0)
   })
 
-  test("createDailyCards assigns accounts round-robin and formats originals", async () => {
+  test("createDailyReplyCards inserts only reply cards and assigns accounts round-robin", async () => {
     stubRequiredEnv()
     const t = convexTest(schema, modules)
     const { projectId } = await seedProject(t)
@@ -361,7 +471,7 @@ describe("pipeline Convex mutations", () => {
       return { runId, account1, account2, surfacedPostId }
     })
 
-    const result = await t.mutation(internal.pipeline.createCards.createDailyCards, {
+    const result = await t.mutation(internal.pipeline.createCards.createDailyReplyCards, {
       projectId,
       runId: seeded.runId,
       selectedDrafts: [
@@ -372,17 +482,16 @@ describe("pipeline Convex mutations", () => {
           draftContent: "Reply 1",
         },
         {
-          type: "original",
-          targetSubreddit: "startups",
-          title: "Original title",
-          body: "Original body",
-          draftContent: "Original title\nOriginal body",
+          type: "reply",
+          surfacedPostId: seeded.surfacedPostId,
+          targetSubreddit: "saas",
+          draftContent: "Reply 2",
         },
         {
           type: "reply",
           surfacedPostId: seeded.surfacedPostId,
           targetSubreddit: "saas",
-          draftContent: "Reply 2",
+          draftContent: "Reply 3",
         },
       ],
     })
@@ -400,11 +509,11 @@ describe("pipeline Convex mutations", () => {
       seeded.account2,
       seeded.account1,
     ])
-    expect(cards[1].surfacedPostId).toBeNull()
-    expect(cards[1].draftContent).toBe("Original title\nOriginal body")
+    expect(cards.every((card) => card.type === "reply")).toBe(true)
+    expect(cards.every((card) => card.surfacedPostId === seeded.surfacedPostId)).toBe(true)
   })
 
-  test("createDailyCards skips drafts already created for a pipeline run", async () => {
+  test("createDailyReplyCards skips drafts already created for a pipeline run", async () => {
     stubRequiredEnv()
     const t = convexTest(schema, modules)
     const { projectId } = await seedProject(t)
@@ -425,6 +534,104 @@ describe("pipeline Convex mutations", () => {
         healthStatus: "healthy",
         createdAt: Date.now(),
       })
+      const secondRedditAccountId = await ctx.db.insert("redditAccounts", {
+        projectId,
+        redditUsername: "founder2",
+        zernioAccountId: "zernio_founder2",
+        providerCanPost: true,
+        isActive: true,
+        healthStatus: "healthy",
+        createdAt: Date.now(),
+      })
+      const surfacedPostId = await ctx.db.insert("surfacedPosts", {
+        projectId,
+        redditPostId: "abc",
+        subreddit: "saas",
+        title: "Question",
+        url: "https://reddit.com/abc",
+        score: 1,
+        commentCount: 1,
+        postedAt: Date.now(),
+        surfacedAt: Date.now(),
+      })
+      return { runId, redditAccountId, secondRedditAccountId, surfacedPostId }
+    })
+
+    const selectedDrafts = [
+      {
+        type: "reply" as const,
+        surfacedPostId: seeded.surfacedPostId,
+        targetSubreddit: "saas",
+        draftContent: "Reply 1",
+      },
+    ]
+
+    const first = await t.mutation(internal.pipeline.createCards.createDailyReplyCards, {
+      projectId,
+      runId: seeded.runId,
+      selectedDrafts,
+    })
+    const second = await t.mutation(internal.pipeline.createCards.createDailyReplyCards, {
+      projectId,
+      runId: seeded.runId,
+      selectedDrafts: [
+        ...selectedDrafts,
+        {
+          type: "reply",
+          surfacedPostId: seeded.surfacedPostId,
+          targetSubreddit: "saas",
+          draftContent: "Reply 2",
+        },
+      ],
+    })
+
+    const cards = await t.run(async (ctx) => {
+      return await ctx.db
+        .query("cards")
+        .withIndex("by_projectId", (q) => q.eq("projectId", projectId))
+        .take(10)
+    })
+
+    expect(first.created).toBe(1)
+    expect(second.created).toBe(1)
+    expect(cards).toHaveLength(2)
+    expect(cards[0].redditAccountId).toBe(seeded.redditAccountId)
+    expect(cards[1].redditAccountId).toBe(seeded.redditAccountId)
+    expect(cards.every((card) => card.redditAccountId !== seeded.secondRedditAccountId)).toBe(true)
+  })
+
+  test("createDailyReplyCards finds healthy accounts after unhealthy rows", async () => {
+    stubRequiredEnv()
+    const t = convexTest(schema, modules)
+    const { projectId } = await seedProject(t)
+
+    const seeded = await t.run(async (ctx) => {
+      const runId = await ctx.db.insert("pipelineRuns", {
+        projectId,
+        localDate: "2026-06-09",
+        status: "running",
+        startedAt: Date.now(),
+      })
+      for (let index = 0; index < 50; index++) {
+        await ctx.db.insert("redditAccounts", {
+          projectId,
+          redditUsername: `unhealthy_${index}`,
+          zernioAccountId: `zernio_unhealthy_${index}`,
+          providerCanPost: true,
+          isActive: true,
+          healthStatus: "warning",
+          createdAt: Date.now(),
+        })
+      }
+      const redditAccountId = await ctx.db.insert("redditAccounts", {
+        projectId,
+        redditUsername: "healthy",
+        zernioAccountId: "zernio_healthy",
+        providerCanPost: true,
+        isActive: true,
+        healthStatus: "healthy",
+        createdAt: Date.now(),
+      })
       const surfacedPostId = await ctx.db.insert("surfacedPosts", {
         projectId,
         redditPostId: "abc",
@@ -439,24 +646,17 @@ describe("pipeline Convex mutations", () => {
       return { runId, redditAccountId, surfacedPostId }
     })
 
-    const selectedDrafts = [
-      {
-        type: "reply" as const,
-        surfacedPostId: seeded.surfacedPostId,
-        targetSubreddit: "saas",
-        draftContent: "Reply 1",
-      },
-    ]
-
-    const first = await t.mutation(internal.pipeline.createCards.createDailyCards, {
+    const result = await t.mutation(internal.pipeline.createCards.createDailyReplyCards, {
       projectId,
       runId: seeded.runId,
-      selectedDrafts,
-    })
-    const second = await t.mutation(internal.pipeline.createCards.createDailyCards, {
-      projectId,
-      runId: seeded.runId,
-      selectedDrafts,
+      selectedDrafts: [
+        {
+          type: "reply",
+          surfacedPostId: seeded.surfacedPostId,
+          targetSubreddit: "saas",
+          draftContent: "Reply",
+        },
+      ],
     })
 
     const cards = await t.run(async (ctx) => {
@@ -466,10 +666,106 @@ describe("pipeline Convex mutations", () => {
         .take(10)
     })
 
-    expect(first.created).toBe(1)
-    expect(second.created).toBe(0)
-    expect(cards).toHaveLength(1)
+    expect(result).toEqual({ created: 1, skipped: false })
     expect(cards[0].redditAccountId).toBe(seeded.redditAccountId)
+  })
+
+  test("createDailyReplyCards skips mismatched runs and surfaced posts", async () => {
+    stubRequiredEnv()
+    const t = convexTest(schema, modules)
+    const { projectId } = await seedProject(t)
+    const { projectId: otherProjectId } = await seedProject(t)
+
+    const seeded = await t.run(async (ctx) => {
+      const runId = await ctx.db.insert("pipelineRuns", {
+        projectId,
+        localDate: "2026-06-09",
+        status: "running",
+        startedAt: Date.now(),
+      })
+      const accountId = await ctx.db.insert("redditAccounts", {
+        projectId,
+        redditUsername: "founder1",
+        zernioAccountId: "zernio_founder1",
+        providerCanPost: true,
+        isActive: true,
+        healthStatus: "healthy",
+        createdAt: Date.now(),
+      })
+      const surfacedPostId = await ctx.db.insert("surfacedPosts", {
+        projectId,
+        redditPostId: "abc",
+        subreddit: "saas",
+        title: "Question",
+        url: "https://reddit.com/abc",
+        score: 1,
+        commentCount: 1,
+        postedAt: Date.now(),
+        surfacedAt: Date.now(),
+      })
+      const otherSurfacedPostId = await ctx.db.insert("surfacedPosts", {
+        projectId: otherProjectId,
+        redditPostId: "other",
+        subreddit: "saas",
+        title: "Other",
+        url: "https://reddit.com/other",
+        score: 1,
+        commentCount: 1,
+        postedAt: Date.now(),
+        surfacedAt: Date.now(),
+      })
+      return { runId, accountId, surfacedPostId, otherSurfacedPostId }
+    })
+
+    const wrongRunResult = await t.mutation(
+      internal.pipeline.createCards.createDailyReplyCards,
+      {
+        projectId: otherProjectId,
+        runId: seeded.runId,
+        selectedDrafts: [
+          {
+            type: "reply",
+            surfacedPostId: seeded.otherSurfacedPostId,
+            targetSubreddit: "saas",
+            draftContent: "Wrong run",
+          },
+        ],
+      },
+    )
+    const mixedPostResult = await t.mutation(
+      internal.pipeline.createCards.createDailyReplyCards,
+      {
+        projectId,
+        runId: seeded.runId,
+        selectedDrafts: [
+          {
+            type: "reply",
+            surfacedPostId: seeded.otherSurfacedPostId,
+            targetSubreddit: "saas",
+            draftContent: "Wrong post",
+          },
+          {
+            type: "reply",
+            surfacedPostId: seeded.surfacedPostId,
+            targetSubreddit: "saas",
+            draftContent: "Right post",
+          },
+        ],
+      },
+    )
+
+    const cards = await t.run(async (ctx) => {
+      return await ctx.db
+        .query("cards")
+        .withIndex("by_projectId", (q) => q.eq("projectId", projectId))
+        .take(10)
+    })
+
+    expect(wrongRunResult).toEqual({ created: 0, skipped: false })
+    expect(mixedPostResult).toEqual({ created: 1, skipped: false })
+    expect(cards).toHaveLength(1)
+    expect(cards[0].surfacedPostId).toBe(seeded.surfacedPostId)
+    expect(cards[0].redditAccountId).toBe(seeded.accountId)
   })
 })
 

@@ -6,11 +6,23 @@ import {
 } from "../_generated/server"
 import type { Id } from "../_generated/dataModel"
 import type { Plan } from "../lib/planLimits"
-import type { Draft, FetchedPost } from "./validators"
+import type {
+  FetchedPost,
+  ReplyDraft,
+  ReplyOpportunity,
+  ScoutedPost,
+  SurfacedPostCandidate,
+} from "./validators"
 
 const countsValidator = v.object({
   fetchedPosts: v.optional(v.number()),
   newPosts: v.optional(v.number()),
+  storedPosts: v.optional(v.number()),
+  scoutedPosts: v.optional(v.number()),
+  opportunityShards: v.optional(v.number()),
+  replyOpportunities: v.optional(v.number()),
+  replyDrafts: v.optional(v.number()),
+  selectedReplies: v.optional(v.number()),
   filteredPosts: v.optional(v.number()),
   drafts: v.optional(v.number()),
   selectedCards: v.optional(v.number()),
@@ -20,6 +32,12 @@ const countsValidator = v.object({
 type PipelineCounts = {
   fetchedPosts?: number
   newPosts?: number
+  storedPosts?: number
+  scoutedPosts?: number
+  opportunityShards?: number
+  replyOpportunities?: number
+  replyDrafts?: number
+  selectedReplies?: number
   filteredPosts?: number
   drafts?: number
   selectedCards?: number
@@ -179,81 +197,152 @@ export const runDailyPipeline = internalAction({
       )
       counts.fetchedPosts = fetchedPosts.length
 
-      const newPostIds: Array<Id<"surfacedPosts">> = []
       for (let index = 0; index < fetchedPosts.length; index += 100) {
-        const insertedIds: Array<Id<"surfacedPosts">> = await ctx.runMutation(
-          internal.pipeline.storePosts.storeNewPosts,
+        const stored: { storedPosts: number; newPosts: number } = await ctx.runMutation(
+          internal.pipeline.storePosts.storeFetchedPosts,
           {
             projectId: args.projectId,
             posts: fetchedPosts.slice(index, index + 100),
           },
         )
-        newPostIds.push(...insertedIds)
+        counts.storedPosts = (counts.storedPosts ?? 0) + stored.storedPosts
+        counts.newPosts = (counts.newPosts ?? 0) + stored.newPosts
       }
-      counts.newPosts = newPostIds.length
 
-      if (newPostIds.length === 0) {
+      const candidateGroups: Array<{
+        subreddit: string
+        candidates: SurfacedPostCandidate[]
+      }> = await ctx.runQuery(
+        internal.pipeline.data.loadRecentUncardedCandidates,
+        { projectId: args.projectId },
+      )
+      const candidateCount = candidateGroups.reduce(
+        (total, group) => total + group.candidates.length,
+        0,
+      )
+
+      if (candidateCount === 0) {
         await ctx.runMutation(
           internal.pipeline.orchestrator.markPipelineRunSkipped,
           {
             runId,
-            reason: "no_new_posts",
+            reason: "no_recent_posts",
             counts,
           },
         )
-        return { status: "skipped", reason: "no_new_posts", counts }
+        return { status: "skipped", reason: "no_recent_posts", counts }
       }
 
-      const filteredPostIds: Array<Id<"surfacedPosts">> = await ctx.runAction(
-        internal.pipeline.filterAgent.filterPosts,
-        {
+      const scoutSettlements = await Promise.allSettled(candidateGroups.map((group) =>
+        ctx.runAction(internal.pipeline.subredditScout.runSubredditScout, {
           projectId: args.projectId,
-          surfacedPostIds: newPostIds,
-        },
-      )
-      counts.filteredPosts = filteredPostIds.length
+          subreddit: group.subreddit,
+          candidates: group.candidates,
+        }),
+      ))
+      const scoutResults = scoutSettlements
+        .filter((result): result is PromiseFulfilledResult<ScoutedPost[]> =>
+          result.status === "fulfilled",
+        )
+        .map((result) => result.value)
+      if (scoutResults.length === 0) {
+        throw new Error("All subreddit scout actions failed")
+      }
+      const scoutedPosts: ScoutedPost[] = scoutResults.flat()
+      counts.scoutedPosts = scoutedPosts.length
 
-      const drafts: Draft[] = await ctx.runAction(
-        internal.pipeline.draftOrchestrator.generateAllDrafts,
-        {
-          projectId: args.projectId,
-          filteredPostIds,
-        },
-      )
-      counts.drafts = drafts.length
-
-      const selectedDrafts: Draft[] = await ctx.runAction(
-        internal.pipeline.judgeAgent.selectCards,
-        {
-          projectId: args.projectId,
-          drafts,
-        },
-      )
-      counts.selectedCards = selectedDrafts.length
-
-      if (selectedDrafts.length === 0) {
+      if (scoutedPosts.length === 0) {
         await ctx.runMutation(
           internal.pipeline.orchestrator.markPipelineRunSkipped,
           {
             runId,
-            reason: "no_selected_drafts",
+            reason: "no_scouted_posts",
             counts,
           },
         )
-        return { status: "skipped", reason: "no_selected_drafts", counts }
+        return { status: "skipped", reason: "no_scouted_posts", counts }
+      }
+
+      const opportunityResult: {
+        opportunities: ReplyOpportunity[]
+        shardCount: number
+      } = await ctx.runAction(
+        internal.pipeline.opportunityJudges.selectReplyOpportunities,
+        {
+          projectId: args.projectId,
+          scoutedPosts,
+        },
+      )
+      counts.opportunityShards = opportunityResult.shardCount
+      counts.replyOpportunities = opportunityResult.opportunities.length
+
+      if (opportunityResult.opportunities.length === 0) {
+        await ctx.runMutation(
+          internal.pipeline.orchestrator.markPipelineRunSkipped,
+          {
+            runId,
+            reason: "no_reply_opportunities",
+            counts,
+          },
+        )
+        return { status: "skipped", reason: "no_reply_opportunities", counts }
+      }
+
+      const replyDrafts: ReplyDraft[] = await ctx.runAction(
+        internal.pipeline.draftOrchestrator.generateReplyDrafts,
+        {
+          projectId: args.projectId,
+          opportunities: opportunityResult.opportunities,
+        },
+      )
+      counts.replyDrafts = replyDrafts.length
+      counts.drafts = replyDrafts.length
+
+      if (replyDrafts.length === 0) {
+        await ctx.runMutation(
+          internal.pipeline.orchestrator.markPipelineRunSkipped,
+          {
+            runId,
+            reason: "no_reply_drafts",
+            counts,
+          },
+        )
+        return { status: "skipped", reason: "no_reply_drafts", counts }
+      }
+
+      const selectedReplies: ReplyDraft[] = await ctx.runAction(
+        internal.pipeline.replySelectionAgent.selectFinalReplies,
+        {
+          projectId: args.projectId,
+          drafts: replyDrafts,
+        },
+      )
+      counts.selectedReplies = selectedReplies.length
+      counts.selectedCards = selectedReplies.length
+
+      if (selectedReplies.length === 0) {
+        await ctx.runMutation(
+          internal.pipeline.orchestrator.markPipelineRunSkipped,
+          {
+            runId,
+            reason: "no_selected_replies",
+            counts,
+          },
+        )
+        return { status: "skipped", reason: "no_selected_replies", counts }
       }
 
       const created: { created: number; skipped: boolean } = await ctx.runMutation(
-        internal.pipeline.createCards.createDailyCards,
+        internal.pipeline.createCards.createDailyReplyCards,
         {
           projectId: args.projectId,
           runId,
-          selectedDrafts,
+          selectedDrafts: selectedReplies,
         },
       )
       counts.createdCards = created.created
 
-      if (created.created === 0) {
+      if (created.skipped) {
         await ctx.runMutation(
           internal.pipeline.orchestrator.markPipelineRunSkipped,
           {
