@@ -18,6 +18,15 @@ import {
   replySelectionPath,
   sanitizeReplySelection,
 } from "./pipeline/replySelectionAgent"
+import {
+  ORIGINAL_REWRITE_ROUNDS,
+  desiredOriginalThemeCount,
+  originalScoutChunks,
+  sanitizeFinalOriginalSelection,
+  sanitizeOriginalSignals,
+  sanitizeOriginalThemes,
+  sanitizeThemeSelection,
+} from "./pipeline/originalPipeline"
 import { localDateAndHour } from "./crons"
 import { isValidProjectIntelligenceProfile } from "./pipeline/data"
 import { stringifyRulesJson } from "./lib/rules"
@@ -323,6 +332,158 @@ describe("pipeline helpers", () => {
 
     expect(replySelectionPath("scale")).toBe("scale")
     expect(sanitizeReplySelection(drafts, [], 32)).toHaveLength(32)
+  })
+
+  test("original scout chunks follow plan subreddit caps", () => {
+    const subreddits = Array.from({ length: 25 }, (_, index) => `subreddit_${index}`)
+
+    expect(originalScoutChunks(subreddits, "starter")).toHaveLength(1)
+    expect(originalScoutChunks(subreddits, "growth")).toHaveLength(3)
+    expect(originalScoutChunks(subreddits, "scale")).toHaveLength(5)
+  })
+
+  test("original sanitizers ignore invalid IDs, dedupe, and fill deterministically", () => {
+    const context = {
+      project: { plan: "growth" as const },
+      brand: { intelligenceJson: JSON.stringify({ name: "Astreex" }) },
+      subreddits: [
+        { name: "saas", memberCount: null, description: null, rulesJson: null, relevanceScore: 90, reasoning: "fit" },
+        { name: "startups", memberCount: null, description: null, rulesJson: null, relevanceScore: 80, reasoning: "fit" },
+      ],
+      recentPosts: [
+        {
+          _id: "post_1" as Id<"surfacedPosts">,
+          redditPostId: "r1",
+          subreddit: "saas",
+          title: "How do I qualify leads?",
+          url: "https://reddit.com/1",
+          score: 5,
+          commentCount: 7,
+          postedAt: Date.now(),
+        },
+        {
+          _id: "post_2" as Id<"surfacedPosts">,
+          redditPostId: "r2",
+          subreddit: "startups",
+          title: "Founder sales is confusing",
+          url: "https://reddit.com/2",
+          score: 3,
+          commentCount: 4,
+          postedAt: Date.now(),
+        },
+      ],
+      performance: [],
+    }
+
+    const signals = sanitizeOriginalSignals(
+      [
+        {
+          subreddit: "saas",
+          sourceId: "missing",
+          sourceType: "post" as const,
+          painPoint: "Bad",
+          whyItMatters: "Bad",
+          possiblePostDirection: "Bad",
+        },
+        {
+          subreddit: "saas",
+          sourceId: "post_1",
+          sourceType: "post" as const,
+          painPoint: "Lead qualification",
+          whyItMatters: "Founders waste time",
+          possiblePostDirection: "A practical lead scoring rubric",
+        },
+        {
+          subreddit: "saas",
+          sourceId: "post_1",
+          sourceType: "post" as const,
+          painPoint: "Lead qualification",
+          whyItMatters: "Duplicate",
+          possiblePostDirection: "A practical lead scoring rubric",
+        },
+      ],
+      context,
+      ["saas", "startups"],
+      3,
+    )
+
+    expect(signals).toHaveLength(3)
+    expect(signals[0].sourceId).toBe("post_1")
+    expect(new Set(signals.map((signal) => signal.signalId)).size).toBe(3)
+
+    const themes = sanitizeOriginalThemes(
+      [
+        {
+          themeId: "theme_a",
+          title: "Qualification",
+          summary: "How to qualify leads",
+          signalIds: ["missing", signals[0].signalId],
+          targetSubreddits: ["missing", "saas"],
+        },
+        {
+          themeId: "theme_ungrounded",
+          title: "Ungrounded",
+          summary: "No valid signal",
+          signalIds: ["missing"],
+          targetSubreddits: ["saas"],
+        },
+        {
+          themeId: "theme_dup",
+          title: "Qualification",
+          summary: "Duplicate",
+          signalIds: [signals[0].signalId],
+          targetSubreddits: ["saas"],
+        },
+      ],
+      signals,
+      desiredOriginalThemeCount("growth"),
+    )
+    const selectedThemes = sanitizeThemeSelection(themes, ["missing", "theme_a", "theme_a"], 3)
+
+    expect(desiredOriginalThemeCount("growth")).toBe(6)
+    expect(desiredOriginalThemeCount("scale")).toBe(16)
+    expect(themes).toHaveLength(4)
+    expect(themes.some((theme) => theme.themeId === "theme_ungrounded")).toBe(false)
+    expect(themes[0].signalIds).toEqual([signals[0].signalId])
+    expect(themes[0].targetSubreddits).toEqual(["saas"])
+    expect(selectedThemes.map((theme) => theme.themeId)).toEqual([
+      "theme_a",
+      themes[1].themeId,
+      themes[2].themeId,
+    ])
+  })
+
+  test("final original selection force-fills after two rewrite rounds", () => {
+    const drafts = ["a", "b", "c"].map((id) => ({
+      draftId: id,
+      brief: {
+        briefId: `brief_${id}`,
+        targetSubreddit: "saas",
+        titleAngle: id,
+        bodyDirection: id,
+      },
+      draft: {
+        type: "original" as const,
+        targetSubreddit: "saas",
+        title: `Title ${id}`,
+        body: `Body ${id}`,
+        draftContent: `Title ${id}\nBody ${id}`,
+      },
+    }))
+
+    const duplicateDrafts = [
+      ...drafts,
+      {
+        ...drafts[0],
+        draftId: "duplicate",
+        brief: { ...drafts[0].brief, briefId: "brief_duplicate" },
+      },
+    ]
+
+    expect(ORIGINAL_REWRITE_ROUNDS).toBe(2)
+    expect(sanitizeFinalOriginalSelection(drafts, ["missing"], 2, false)).toHaveLength(0)
+    expect(sanitizeFinalOriginalSelection(drafts, ["missing"], 2, true).map((item) => item.draftId)).toEqual(["a", "b"])
+    expect(sanitizeFinalOriginalSelection(duplicateDrafts, ["a", "duplicate", "b"], 3, true).map((item) => item.draftId)).toEqual(["a", "b", "c"])
   })
 
   test("Project Intelligence Profile validity rejects empty and malformed JSON", () => {
@@ -766,6 +927,182 @@ describe("pipeline Convex mutations", () => {
     expect(cards).toHaveLength(1)
     expect(cards[0].surfacedPostId).toBe(seeded.surfacedPostId)
     expect(cards[0].redditAccountId).toBe(seeded.accountId)
+  })
+
+  test("createDailyOriginalCards inserts original cards, round-robins, and dedupes reruns", async () => {
+    const t = convexTest(schema, modules)
+    const { projectId } = await seedProject(t)
+
+    const seeded = await t.run(async (ctx) => {
+      const runId = await ctx.db.insert("pipelineRuns", {
+        projectId,
+        localDate: "2026-06-09",
+        status: "running",
+        startedAt: Date.now(),
+      })
+      const account1 = await ctx.db.insert("redditAccounts", {
+        projectId,
+        redditUsername: "founder1",
+        zernioAccountId: "zernio_founder1",
+        providerCanPost: true,
+        isActive: true,
+        healthStatus: "healthy",
+        createdAt: Date.now(),
+      })
+      const account2 = await ctx.db.insert("redditAccounts", {
+        projectId,
+        redditUsername: "founder2",
+        zernioAccountId: "zernio_founder2",
+        providerCanPost: true,
+        isActive: true,
+        healthStatus: "healthy",
+        createdAt: Date.now(),
+      })
+      return { runId, account1, account2 }
+    })
+
+    const selectedDrafts = [
+      {
+        type: "original" as const,
+        targetSubreddit: "saas",
+        title: "Title 1",
+        body: "Body 1",
+        draftContent: "Title 1\nBody 1",
+        briefId: "brief_1",
+      },
+      {
+        type: "original" as const,
+        targetSubreddit: "startups",
+        title: "Title 2",
+        body: "Body 2",
+        draftContent: "Title 2\nBody 2",
+        briefId: "brief_2",
+      },
+      {
+        type: "original" as const,
+        targetSubreddit: "saas",
+        title: "Title 3",
+        body: "Body 3",
+        draftContent: "Title 3\nBody 3",
+        briefId: "brief_3",
+      },
+    ]
+
+    const first = await t.mutation(internal.pipeline.createCards.createDailyOriginalCards, {
+      projectId,
+      runId: seeded.runId,
+      selectedDrafts,
+    })
+    const second = await t.mutation(internal.pipeline.createCards.createDailyOriginalCards, {
+      projectId,
+      runId: seeded.runId,
+      selectedDrafts,
+    })
+
+    const cards = await t.run(async (ctx) => {
+      return await ctx.db
+        .query("cards")
+        .withIndex("by_projectId", (q) => q.eq("projectId", projectId))
+        .take(10)
+    })
+
+    expect(first).toEqual({ created: 3, skipped: false })
+    expect(second).toEqual({ created: 0, skipped: false })
+    expect(cards.map((card) => card.redditAccountId)).toEqual([
+      seeded.account1,
+      seeded.account2,
+      seeded.account1,
+    ])
+    expect(cards.every((card) => card.type === "original")).toBe(true)
+    expect(cards.every((card) => card.surfacedPostId === null)).toBe(true)
+  })
+
+  test("createDailyOriginalCards skips when there are no healthy accounts", async () => {
+    const t = convexTest(schema, modules)
+    const { projectId } = await seedProject(t)
+
+    const runId = await t.run(async (ctx) => {
+      const insertedRunId = await ctx.db.insert("pipelineRuns", {
+        projectId,
+        localDate: "2026-06-09",
+        status: "running",
+        startedAt: Date.now(),
+      })
+      await ctx.db.insert("redditAccounts", {
+        projectId,
+        redditUsername: "founder1",
+        zernioAccountId: "zernio_founder1",
+        providerCanPost: true,
+        isActive: true,
+        healthStatus: "warning",
+        createdAt: Date.now(),
+      })
+      return insertedRunId
+    })
+
+    const result = await t.mutation(internal.pipeline.createCards.createDailyOriginalCards, {
+      projectId,
+      runId,
+      selectedDrafts: [
+        {
+          type: "original",
+          targetSubreddit: "saas",
+          title: "Title",
+          body: "Body",
+          draftContent: "Title\nBody",
+        },
+      ],
+    })
+
+    expect(result).toEqual({ created: 0, skipped: true })
+  })
+
+  test("createDailyOriginalCards denies mismatched project and run", async () => {
+    const t = convexTest(schema, modules)
+    const { projectId } = await seedProject(t)
+    const { projectId: otherProjectId } = await seedProject(t)
+
+    const runId = await t.run(async (ctx) => {
+      const insertedRunId = await ctx.db.insert("pipelineRuns", {
+        projectId,
+        localDate: "2026-06-09",
+        status: "running",
+        startedAt: Date.now(),
+      })
+      await ctx.db.insert("redditAccounts", {
+        projectId: otherProjectId,
+        redditUsername: "founder1",
+        zernioAccountId: "zernio_founder1",
+        providerCanPost: true,
+        isActive: true,
+        healthStatus: "healthy",
+        createdAt: Date.now(),
+      })
+      return insertedRunId
+    })
+
+    const result = await t.mutation(internal.pipeline.createCards.createDailyOriginalCards, {
+      projectId: otherProjectId,
+      runId,
+      selectedDrafts: [
+        {
+          type: "original",
+          targetSubreddit: "saas",
+          title: "Title",
+          body: "Body",
+          draftContent: "Title\nBody",
+        },
+      ],
+    })
+    const cards = await t.run(async (ctx) => {
+      return await ctx.db
+        .query("cards")
+        .withIndex("by_projectId", (q) => q.eq("projectId", otherProjectId))
+        .take(10)
+    })
+
+    expect(result).toEqual({ created: 0, skipped: false })
+    expect(cards).toHaveLength(0)
   })
 })
 
