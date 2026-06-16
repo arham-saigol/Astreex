@@ -421,6 +421,13 @@ describe("pipeline helpers", () => {
           targetSubreddits: ["missing", "saas"],
         },
         {
+          themeId: "theme_ungrounded",
+          title: "Ungrounded",
+          summary: "No valid signal",
+          signalIds: ["missing"],
+          targetSubreddits: ["saas"],
+        },
+        {
           themeId: "theme_dup",
           title: "Qualification",
           summary: "Duplicate",
@@ -436,6 +443,7 @@ describe("pipeline helpers", () => {
     expect(desiredOriginalThemeCount("growth")).toBe(6)
     expect(desiredOriginalThemeCount("scale")).toBe(16)
     expect(themes).toHaveLength(4)
+    expect(themes.some((theme) => theme.themeId === "theme_ungrounded")).toBe(false)
     expect(themes[0].signalIds).toEqual([signals[0].signalId])
     expect(themes[0].targetSubreddits).toEqual(["saas"])
     expect(selectedThemes.map((theme) => theme.themeId)).toEqual([
@@ -463,9 +471,19 @@ describe("pipeline helpers", () => {
       },
     }))
 
+    const duplicateDrafts = [
+      ...drafts,
+      {
+        ...drafts[0],
+        draftId: "duplicate",
+        brief: { ...drafts[0].brief, briefId: "brief_duplicate" },
+      },
+    ]
+
     expect(ORIGINAL_REWRITE_ROUNDS).toBe(2)
     expect(sanitizeFinalOriginalSelection(drafts, ["missing"], 2, false)).toHaveLength(0)
     expect(sanitizeFinalOriginalSelection(drafts, ["missing"], 2, true).map((item) => item.draftId)).toEqual(["a", "b"])
+    expect(sanitizeFinalOriginalSelection(duplicateDrafts, ["a", "duplicate", "b"], 3, true).map((item) => item.draftId)).toEqual(["a", "b", "c"])
   })
 
   test("Project Intelligence Profile validity rejects empty and malformed JSON", () => {
@@ -1037,6 +1055,54 @@ describe("pipeline Convex mutations", () => {
     })
 
     expect(result).toEqual({ created: 0, skipped: true })
+  })
+
+  test("createDailyOriginalCards denies mismatched project and run", async () => {
+    const t = convexTest(schema, modules)
+    const { projectId } = await seedProject(t)
+    const { projectId: otherProjectId } = await seedProject(t)
+
+    const runId = await t.run(async (ctx) => {
+      const insertedRunId = await ctx.db.insert("pipelineRuns", {
+        projectId,
+        localDate: "2026-06-09",
+        status: "running",
+        startedAt: Date.now(),
+      })
+      await ctx.db.insert("redditAccounts", {
+        projectId: otherProjectId,
+        redditUsername: "founder1",
+        zernioAccountId: "zernio_founder1",
+        providerCanPost: true,
+        isActive: true,
+        healthStatus: "healthy",
+        createdAt: Date.now(),
+      })
+      return insertedRunId
+    })
+
+    const result = await t.mutation(internal.pipeline.createCards.createDailyOriginalCards, {
+      projectId: otherProjectId,
+      runId,
+      selectedDrafts: [
+        {
+          type: "original",
+          targetSubreddit: "saas",
+          title: "Title",
+          body: "Body",
+          draftContent: "Title\nBody",
+        },
+      ],
+    })
+    const cards = await t.run(async (ctx) => {
+      return await ctx.db
+        .query("cards")
+        .withIndex("by_projectId", (q) => q.eq("projectId", otherProjectId))
+        .take(10)
+    })
+
+    expect(result).toEqual({ created: 0, skipped: false })
+    expect(cards).toHaveLength(0)
   })
 })
 

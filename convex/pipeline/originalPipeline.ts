@@ -310,6 +310,8 @@ export function sanitizeOriginalThemes(
     const signalIds = (theme.signalIds ?? []).filter((id, index, ids) =>
       signalById.has(id) && ids.indexOf(id) === index,
     )
+    if (signalIds.length === 0) continue
+
     const targetSubreddits = (theme.targetSubreddits ?? [])
       .map(normalizeSubredditName)
       .filter((subreddit, index, names) =>
@@ -403,15 +405,18 @@ export function sanitizePostBriefs(
     const dedupeKey = `${targetSubreddit}:${titleAngle.toLowerCase()}`
     if (seen.has(dedupeKey)) continue
 
+    const signalIds = (brief.signalIds ?? []).filter((id, index, ids) =>
+      signalById.has(id) && ids.indexOf(id) === index,
+    )
+    if (signalIds.length === 0) continue
+
     briefs.push({
       briefId: `brief_${stableHash(dedupeKey)}`,
       targetSubreddit,
       titleAngle,
       bodyDirection,
       rationale: brief.rationale?.trim() || undefined,
-      signalIds: (brief.signalIds ?? []).filter((id, index, ids) =>
-        signalById.has(id) && ids.indexOf(id) === index,
-      ),
+      signalIds,
       themeId: brief.themeId,
     })
     seen.add(dedupeKey)
@@ -546,6 +551,14 @@ export function draftPrompt(drafts: DraftCandidate[]) {
   }))
 }
 
+function draftContentKey(draft: DraftCandidate) {
+  return JSON.stringify({
+    subreddit: normalizeSubredditName(draft.draft.targetSubreddit),
+    title: draft.draft.title.trim().toLowerCase(),
+    body: draft.draft.body.trim().toLowerCase(),
+  })
+}
+
 export function sanitizeFinalOriginalSelection(
   drafts: DraftCandidate[],
   selectedDraftIds: string[],
@@ -558,18 +571,21 @@ export function sanitizeFinalOriginalSelection(
 
   for (const draftId of selectedDraftIds) {
     const draft = byId.get(draftId)
-    if (!draft || seen.has(draftId)) continue
+    if (!draft) continue
+    const key = draftContentKey(draft)
+    if (seen.has(key)) continue
     selected.push(draft)
-    seen.add(draftId)
+    seen.add(key)
     if (selected.length >= targetCount) return selected
   }
 
   if (!forceFill) return selected
 
   for (const draft of drafts) {
-    if (seen.has(draft.draftId)) continue
+    const key = draftContentKey(draft)
+    if (seen.has(key)) continue
     selected.push(draft)
-    seen.add(draft.draftId)
+    seen.add(key)
     if (selected.length >= targetCount) return selected
   }
 

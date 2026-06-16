@@ -350,6 +350,18 @@ export const loadOriginalPipelineContext = internalQuery({
       .slice(0, limits.activeSubredditLimit)
 
     const cutoff = Date.now() - 14 * 24 * 60 * 60 * 1000
+    const recentPostRows = await Promise.all(activeSubreddits.map((subreddit) =>
+      ctx.db
+        .query("surfacedPosts")
+        .withIndex("by_projectId_and_subreddit_and_postedAt", (q) =>
+          q
+            .eq("projectId", args.projectId)
+            .eq("subreddit", normalizeSubredditName(subreddit.name))
+            .gte("postedAt", cutoff),
+        )
+        .order("desc")
+        .take(10),
+    ))
     const recentPosts: Array<{
       _id: Id<"surfacedPosts">
       redditPostId: string
@@ -360,32 +372,17 @@ export const loadOriginalPipelineContext = internalQuery({
       score: number
       commentCount: number
       postedAt: number
-    }> = []
-
-    for (const subreddit of activeSubreddits) {
-      const posts = await ctx.db
-        .query("surfacedPosts")
-        .withIndex("by_projectId_and_subreddit_and_postedAt", (q) =>
-          q
-            .eq("projectId", args.projectId)
-            .eq("subreddit", normalizeSubredditName(subreddit.name))
-            .gte("postedAt", cutoff),
-        )
-        .order("desc")
-        .take(10)
-
-      recentPosts.push(...posts.map((post) => ({
-        _id: post._id,
-        redditPostId: post.redditPostId,
-        subreddit: post.subreddit,
-        title: post.title,
-        selftext: post.selftext,
-        url: post.url,
-        score: post.score,
-        commentCount: post.commentCount,
-        postedAt: post.postedAt,
-      })))
-    }
+    }> = recentPostRows.flatMap((posts) => posts.map((post) => ({
+      _id: post._id,
+      redditPostId: post.redditPostId,
+      subreddit: post.subreddit,
+      title: post.title,
+      selftext: post.selftext,
+      url: post.url,
+      score: post.score,
+      commentCount: post.commentCount,
+      postedAt: post.postedAt,
+    })))
 
     const postedSince = Date.now() - 14 * 24 * 60 * 60 * 1000
     const postedRows = await ctx.db

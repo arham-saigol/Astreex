@@ -35,6 +35,10 @@ function truncate(value: string | undefined, length: number) {
   return value.length > length ? `${value.slice(0, length)}...` : value
 }
 
+function normalizeSubredditName(name: string) {
+  return name.replace(/^r\//i, "").trim().toLowerCase()
+}
+
 export const generateSingleReply = internalAction({
   args: {
     projectId: v.id("projects"),
@@ -184,6 +188,19 @@ export const rewriteOriginalPostFromBrief = internalAction({
     rewriteInstructions: v.string(),
   },
   handler: async (ctx, args): Promise<OriginalDraft> => {
+    if (
+      args.currentDraft.briefId !== undefined &&
+      args.currentDraft.briefId !== args.brief.briefId
+    ) {
+      throw new Error("Current draft does not match brief")
+    }
+    if (
+      normalizeSubredditName(args.currentDraft.targetSubreddit) !==
+      normalizeSubredditName(args.brief.targetSubreddit)
+    ) {
+      throw new Error("Current draft does not match brief")
+    }
+
     const context = await ctx.runQuery(
       internal.pipeline.data.loadOriginalDraftContext,
       {
