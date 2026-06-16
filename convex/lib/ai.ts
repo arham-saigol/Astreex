@@ -35,6 +35,22 @@ export const judgeSettings = {
   maxOutputTokens: 4000,
 }
 
+export const deepseekHighReasoningOptions = {
+  providerOptions: {
+    deepseek: {
+      reasoningEffort: "high",
+    },
+  },
+} as const
+
+export const deepseekMaxReasoningOptions = {
+  providerOptions: {
+    deepseek: {
+      reasoningEffort: "max",
+    },
+  },
+} as const
+
 export const replySettings = {
   temperature: 0.7,
   maxOutputTokens: 1000,

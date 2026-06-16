@@ -1,7 +1,13 @@
 import { v } from "convex/values"
 import { internalQuery } from "../_generated/server"
 import type { Doc } from "../_generated/dataModel"
-import { getPlanLimits } from "../lib/planLimits"
+import { getPipelineLimits, getPlanLimits } from "../lib/planLimits"
+
+const RECENT_CANDIDATE_WINDOW_MS = 48 * 60 * 60 * 1000
+
+function normalizeSubredditName(name: string) {
+  return name.replace(/^r\//i, "").trim().toLowerCase()
+}
 
 export function isValidProjectIntelligenceProfile(intelligenceJson: string) {
   try {
@@ -199,6 +205,115 @@ export const loadOriginalDraftContext = internalQuery({
         memberCount: subreddit.memberCount ?? null,
         reasoning: subreddit.reasoning,
       },
+    }
+  },
+})
+
+export const loadRecentUncardedCandidates = internalQuery({
+  args: {
+    projectId: v.id("projects"),
+    now: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const project = await ctx.db.get(args.projectId)
+    if (!project) return []
+
+    const limits = getPipelineLimits(project.plan)
+    const subreddits = await ctx.db
+      .query("subreddits")
+      .withIndex("by_projectId_active", (q) =>
+        q.eq("projectId", args.projectId).eq("active", true),
+      )
+      .take(100)
+    const activeSubreddits = subreddits
+      .sort((a, b) => {
+        if (a.relevanceScore !== b.relevanceScore) {
+          return b.relevanceScore - a.relevanceScore
+        }
+        return a._creationTime - b._creationTime
+      })
+      .slice(0, limits.monitoredSubreddits)
+
+    const cutoff = (args.now ?? Date.now()) - RECENT_CANDIDATE_WINDOW_MS
+    const perSubredditLimit = limits.opportunityShardMaxPosts
+    const groups = []
+
+    for (const subreddit of activeSubreddits) {
+      const subredditName = normalizeSubredditName(subreddit.name)
+      const posts = await ctx.db
+        .query("surfacedPosts")
+        .withIndex("by_projectId_and_subreddit_and_postedAt", (q) =>
+          q
+            .eq("projectId", args.projectId)
+            .eq("subreddit", subredditName)
+            .gte("postedAt", cutoff),
+        )
+        .order("desc")
+        .take(perSubredditLimit)
+
+      const candidates = []
+      for (const post of posts) {
+        const existingCard = await ctx.db
+          .query("cards")
+          .withIndex("by_projectId_and_surfacedPostId", (q) =>
+            q.eq("projectId", args.projectId).eq("surfacedPostId", post._id),
+          )
+          .take(1)
+
+        if (existingCard.length > 0) continue
+
+        candidates.push({
+          surfacedPostId: post._id,
+          redditPostId: post.redditPostId,
+          subreddit: post.subreddit,
+          title: post.title,
+          selftext: post.selftext,
+          url: post.url,
+          score: post.score,
+          commentCount: post.commentCount,
+          postedAt: post.postedAt,
+        })
+      }
+
+      groups.push({ subreddit: subredditName, candidates })
+    }
+
+    return groups
+  },
+})
+
+export const loadReplyPipelineContext = internalQuery({
+  args: {
+    projectId: v.id("projects"),
+    surfacedPostIds: v.array(v.id("surfacedPosts")),
+  },
+  handler: async (ctx, args) => {
+    const project = await ctx.db.get(args.projectId)
+    if (!project) throw new Error("Project not found")
+
+    const brand = await ctx.db
+      .query("projectIntelligenceProfiles")
+      .withIndex("by_projectId", (q) => q.eq("projectId", args.projectId))
+      .first()
+    if (!brand || !isValidProjectIntelligenceProfile(brand.intelligenceJson)) {
+      throw new Error("Project intelligence profile is missing")
+    }
+
+    const posts = (await Promise.all(
+      args.surfacedPostIds.map((surfacedPostId) => ctx.db.get(surfacedPostId)),
+    )).filter(
+      (post): post is Doc<"surfacedPosts"> =>
+        post !== null && post.projectId === args.projectId,
+    )
+
+    return {
+      project: {
+        plan: project.plan,
+      },
+      brand: {
+        intelligenceJson: brand.intelligenceJson,
+      },
+      posts,
     }
   },
 })

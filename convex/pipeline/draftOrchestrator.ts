@@ -3,7 +3,12 @@ import { internal } from "../_generated/api"
 import { internalAction } from "../_generated/server"
 import type { Id } from "../_generated/dataModel"
 import { getPipelineLimits } from "../lib/planLimits"
-import type { Draft } from "./validators"
+import {
+  replyOpportunityValidator,
+  type Draft,
+  type ReplyDraft,
+  type ReplyOpportunity,
+} from "./validators"
 
 export const generateAllDrafts = internalAction({
   args: {
@@ -50,6 +55,36 @@ export const generateAllDrafts = internalAction({
         drafts.push(result.value as Draft)
       } else {
         console.error("Draft generation failed", result.reason)
+      }
+    }
+
+    return drafts
+  },
+})
+
+export const generateReplyDrafts = internalAction({
+  args: {
+    projectId: v.id("projects"),
+    opportunities: v.array(replyOpportunityValidator),
+  },
+  handler: async (ctx, args): Promise<ReplyDraft[]> => {
+    const calls = args.opportunities.map((opportunity: ReplyOpportunity) =>
+      ctx.runAction(internal.pipeline.draftAgent.generateSingleReply, {
+        projectId: args.projectId,
+        surfacedPostId: opportunity.surfacedPostId,
+        scoutRationale: opportunity.scoutRationale,
+        opportunityRationale: opportunity.opportunityRationale,
+      }),
+    )
+
+    const results = await Promise.allSettled(calls)
+    const drafts: ReplyDraft[] = []
+
+    for (const result of results) {
+      if (result.status === "fulfilled") {
+        drafts.push(result.value as ReplyDraft)
+      } else {
+        console.error("Reply draft generation failed", result.reason)
       }
     }
 

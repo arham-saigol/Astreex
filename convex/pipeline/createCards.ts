@@ -1,6 +1,12 @@
 import { v } from "convex/values"
-import { internalMutation } from "../_generated/server"
-import { draftValidator, type Draft } from "./validators"
+import { internalMutation, type MutationCtx } from "../_generated/server"
+import type { Id } from "../_generated/dataModel"
+import {
+  draftValidator,
+  replyDraftValidator,
+  type Draft,
+  type ReplyDraft,
+} from "./validators"
 
 function stableHash(value: string) {
   let hash = 5381
@@ -26,6 +32,30 @@ function draftKey(draft: Draft) {
     title: draft.title,
     body: draft.body,
   }))
+}
+
+function replyDraftKey(draft: ReplyDraft) {
+  return stableHash(JSON.stringify({
+    type: draft.type,
+    surfacedPostId: draft.surfacedPostId,
+    targetSubreddit: draft.targetSubreddit,
+    draftContent: draft.draftContent,
+  }))
+}
+
+async function healthyAccounts(ctx: MutationCtx, projectId: Id<"projects">) {
+  const accounts = await ctx.db
+    .query("redditAccounts")
+    .withIndex("by_projectId", (q) => q.eq("projectId", projectId))
+    .take(50)
+
+  return accounts.filter(
+    (account) =>
+      account.isActive &&
+      account.healthStatus === "healthy" &&
+      account.providerCanPost !== false &&
+      account.providerNeedsReconnect !== true,
+  )
 }
 
 export const createDailyCards = internalMutation({
@@ -96,6 +126,57 @@ export const createDailyCards = internalMutation({
           createdAt: now,
         })
       }
+
+      created++
+    }
+
+    return { created, skipped: false }
+  },
+})
+
+export const createDailyReplyCards = internalMutation({
+  args: {
+    projectId: v.id("projects"),
+    runId: v.id("pipelineRuns"),
+    selectedDrafts: v.array(replyDraftValidator),
+  },
+  handler: async (ctx, args) => {
+    const activeAccounts = await healthyAccounts(ctx, args.projectId)
+
+    if (activeAccounts.length === 0) {
+      return { created: 0, skipped: true }
+    }
+
+    const now = Date.now()
+    let created = 0
+
+    for (const [index, draft] of args.selectedDrafts.entries()) {
+      const key = replyDraftKey(draft)
+      const existing = await ctx.db
+        .query("cards")
+        .withIndex("by_projectId_and_pipelineRunId_and_draftKey", (q) =>
+          q
+            .eq("projectId", args.projectId)
+            .eq("pipelineRunId", args.runId)
+            .eq("draftKey", key),
+        )
+        .first()
+      if (existing) continue
+
+      const redditAccount = activeAccounts[index % activeAccounts.length]
+
+      await ctx.db.insert("cards", {
+        projectId: args.projectId,
+        surfacedPostId: draft.surfacedPostId,
+        redditAccountId: redditAccount._id,
+        type: "reply",
+        targetSubreddit: draft.targetSubreddit,
+        draftContent: draft.draftContent,
+        status: "pending",
+        pipelineRunId: args.runId,
+        draftKey: key,
+        createdAt: now,
+      })
 
       created++
     }
