@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useId, useState } from "react"
 import Link from "next/link"
 import { useAuth } from "@clerk/nextjs"
 import { Menu, X } from "lucide-react"
@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils"
 
 export function MarketingNavbar() {
   const [mobileOpen, setMobileOpen] = useState(false)
+  const mobileMenuId = useId()
 
   let isSignedIn = false
   try {
@@ -71,12 +72,16 @@ export function MarketingNavbar() {
           onClick={() => setMobileOpen(!mobileOpen)}
           className="inline-flex size-10 items-center justify-center rounded-xl text-[#1A1A1A] transition-colors hover:bg-[#F0D7FF] md:hidden"
           aria-label="Toggle menu"
+          aria-expanded={mobileOpen}
+          aria-controls={mobileMenuId}
         >
           {mobileOpen ? <X className="size-5" /> : <Menu className="size-5" />}
         </button>
       </div>
 
       <div
+        id={mobileMenuId}
+        aria-hidden={!mobileOpen}
         className={cn(
           "mx-auto mt-2 max-w-[1060px] overflow-hidden rounded-2xl border-2 border-[#DED9C0] bg-[#FFFFEB]/96 transition-all duration-200 md:hidden",
           mobileOpen ? "max-h-72 p-3" : "max-h-0 border-transparent p-0"

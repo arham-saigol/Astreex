@@ -83,6 +83,7 @@ export function PricingCards({
           <button
             type="button"
             onClick={() => setInterval("monthly")}
+            aria-pressed={!annual}
             className={cn(
               "rounded-2xl border-2 border-[#1A1A1A] px-4 py-2 text-sm font-black transition-transform",
               !annual
@@ -95,6 +96,7 @@ export function PricingCards({
           <button
             type="button"
             onClick={() => setInterval("annual")}
+            aria-pressed={annual}
             className={cn(
               "rounded-2xl border-2 border-[#1A1A1A] px-4 py-2 text-sm font-black transition-transform",
               annual
