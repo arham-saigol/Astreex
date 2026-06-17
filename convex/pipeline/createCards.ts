@@ -2,6 +2,11 @@ import { v } from "convex/values"
 import { internalMutation, type MutationCtx } from "../_generated/server"
 import type { Doc, Id } from "../_generated/dataModel"
 import {
+  isReadyRedditAccount,
+  isUsableRedditAccount,
+  normalizeSubredditName,
+} from "../lib/accountSafety"
+import {
   draftValidator,
   originalDraftValidator,
   replyDraftValidator,
@@ -55,25 +60,40 @@ function originalDraftKey(draft: OriginalDraft) {
   }))
 }
 
-async function healthyAccounts(ctx: MutationCtx, projectId: Id<"projects">) {
-  const accounts = ctx.db
+async function eligibleAccountsForSubreddit(
+  ctx: MutationCtx,
+  projectId: Id<"projects">,
+  subredditName: string | null | undefined,
+) {
+  if (!subredditName) return []
+  const subreddit = normalizeSubredditName(subredditName)
+  const usableAccounts: Array<Doc<"redditAccounts">> = []
+  for await (const account of ctx.db
     .query("redditAccounts")
-    .withIndex("by_projectId", (q) => q.eq("projectId", projectId))
-  const healthy: Array<Doc<"redditAccounts">> = []
-
-  for await (const account of accounts) {
-    if (
-      account.isActive &&
-      account.healthStatus === "healthy" &&
-      account.providerCanPost !== false &&
-      account.providerNeedsReconnect !== true
-    ) {
-      healthy.push(account)
-      if (healthy.length >= 50) break
-    }
+    .withIndex("by_projectId", (q) => q.eq("projectId", projectId))) {
+    if (!isUsableRedditAccount(account)) continue
+    usableAccounts.push(account)
+    if (usableAccounts.length >= 50) break
   }
+  const usableAccountIds = new Set(usableAccounts.map((account) => account._id))
+  const accessRows = await ctx.db
+    .query("redditSubredditAccess")
+    .withIndex("by_projectId_and_subreddit", (q) =>
+      q.eq("projectId", projectId).eq("subreddit", subreddit),
+    )
+    .take(50)
+  const postableAccountIds = new Set(
+    accessRows
+      .filter((row) => row.canPost && usableAccountIds.has(row.redditAccountId))
+      .map((row) => row.redditAccountId),
+  )
+  const postableAccounts = usableAccounts.filter((account) =>
+    postableAccountIds.has(account._id),
+  )
+  const readyAccounts = postableAccounts.filter(isReadyRedditAccount)
+  const hasReadyAccount = usableAccounts.some(isReadyRedditAccount)
 
-  return healthy
+  return hasReadyAccount && readyAccounts.length > 0 ? readyAccounts : postableAccounts
 }
 
 export const createDailyCards = internalMutation({
@@ -83,26 +103,11 @@ export const createDailyCards = internalMutation({
     selectedDrafts: v.array(draftValidator),
   },
   handler: async (ctx, args) => {
-    const accounts = await ctx.db
-      .query("redditAccounts")
-      .withIndex("by_projectId", (q) => q.eq("projectId", args.projectId))
-      .take(50)
-    const activeAccounts = accounts.filter(
-      (account) =>
-        account.isActive &&
-        account.healthStatus === "healthy" &&
-        account.providerCanPost !== false &&
-        account.providerNeedsReconnect !== true,
-    )
-
-    if (activeAccounts.length === 0) {
-      return { created: 0, skipped: true }
-    }
-
     const now = Date.now()
     let created = 0
+    let sawEligibleAccount = false
 
-    for (const [index, draft] of args.selectedDrafts.entries()) {
+    for (const draft of args.selectedDrafts) {
       const key = draftKey(draft)
       const existing = await ctx.db
         .query("cards")
@@ -115,7 +120,14 @@ export const createDailyCards = internalMutation({
         .first()
       if (existing) continue
 
-      const redditAccount = activeAccounts[index % activeAccounts.length]
+      const eligibleAccounts = await eligibleAccountsForSubreddit(
+        ctx,
+        args.projectId,
+        draft.targetSubreddit,
+      )
+      if (eligibleAccounts.length === 0) continue
+      sawEligibleAccount = true
+      const redditAccount = eligibleAccounts[created % eligibleAccounts.length]
 
       if (draft.type === "reply") {
         await ctx.db.insert("cards", {
@@ -148,7 +160,7 @@ export const createDailyCards = internalMutation({
       created++
     }
 
-    return { created, skipped: false }
+    return { created, skipped: !sawEligibleAccount }
   },
 })
 
@@ -164,14 +176,9 @@ export const createDailyReplyCards = internalMutation({
       return { created: 0, skipped: false }
     }
 
-    const activeAccounts = await healthyAccounts(ctx, args.projectId)
-
-    if (activeAccounts.length === 0) {
-      return { created: 0, skipped: true }
-    }
-
     const now = Date.now()
     let created = 0
+    let sawEligibleAccount = false
 
     for (const draft of args.selectedDrafts) {
       const key = replyDraftKey(draft)
@@ -189,7 +196,14 @@ export const createDailyReplyCards = internalMutation({
       const surfacedPost = await ctx.db.get(draft.surfacedPostId)
       if (!surfacedPost || surfacedPost.projectId !== args.projectId) continue
 
-      const redditAccount = activeAccounts[created % activeAccounts.length]
+      const eligibleAccounts = await eligibleAccountsForSubreddit(
+        ctx,
+        args.projectId,
+        draft.targetSubreddit,
+      )
+      if (eligibleAccounts.length === 0) continue
+      sawEligibleAccount = true
+      const redditAccount = eligibleAccounts[created % eligibleAccounts.length]
 
       await ctx.db.insert("cards", {
         projectId: args.projectId,
@@ -207,7 +221,7 @@ export const createDailyReplyCards = internalMutation({
       created++
     }
 
-    return { created, skipped: false }
+    return { created, skipped: !sawEligibleAccount }
   },
 })
 
@@ -223,16 +237,19 @@ export const createDailyOriginalCards = internalMutation({
       return { created: 0, skipped: false }
     }
 
-    const activeAccounts = await healthyAccounts(ctx, args.projectId)
-
-    if (activeAccounts.length === 0) {
-      return { created: 0, skipped: true }
-    }
-
     const now = Date.now()
     let created = 0
+    let sawEligibleAccount = false
 
     for (const draft of args.selectedDrafts) {
+      const eligibleAccounts = await eligibleAccountsForSubreddit(
+        ctx,
+        args.projectId,
+        draft.targetSubreddit,
+      )
+      if (eligibleAccounts.length === 0) continue
+      sawEligibleAccount = true
+
       const key = originalDraftKey(draft)
       const existing = await ctx.db
         .query("cards")
@@ -245,7 +262,7 @@ export const createDailyOriginalCards = internalMutation({
         .first()
       if (existing) continue
 
-      const redditAccount = activeAccounts[created % activeAccounts.length]
+      const redditAccount = eligibleAccounts[created % eligibleAccounts.length]
 
       await ctx.db.insert("cards", {
         projectId: args.projectId,
@@ -263,6 +280,6 @@ export const createDailyOriginalCards = internalMutation({
       created++
     }
 
-    return { created, skipped: false }
+    return { created, skipped: !sawEligibleAccount }
   },
 })

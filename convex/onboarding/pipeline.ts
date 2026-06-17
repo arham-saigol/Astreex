@@ -66,6 +66,10 @@ export const runOnboardingPipeline = internalAction({
         )
       }
 
+      await ctx.runAction(internal.reddit.refreshProjectSubredditAccess, {
+        projectId: args.projectId,
+      })
+
       await ctx.runMutation(internal.onboarding.data.markOnboardingComplete, {
         projectId: args.projectId,
       })

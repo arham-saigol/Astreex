@@ -11,6 +11,7 @@ import {
   deepseekV4Pro,
   judgeSettings,
 } from "../lib/ai"
+import { WARMUP_PROMPT_NOTE } from "../lib/accountSafety"
 import { getPipelineLimits, type Plan } from "../lib/planLimits"
 import { compactIntelligenceJson } from "./intelligenceContext"
 import { replyDraftValidator, type ReplyDraft } from "./validators"
@@ -91,6 +92,7 @@ async function runFinalJudge(args: {
   intelligenceJson: string
   performance: unknown
   extraNotes?: string
+  warmupMode?: string
 }) {
   const result = await generateObject({
     model: deepseekV4Pro(),
@@ -101,6 +103,7 @@ async function runFinalJudge(args: {
       "Select the strongest Reddit reply cards for today's feed.",
       `Return up to ${args.targetCount} zero-based draft indices.`,
       "Prioritize usefulness, brand fit, practical specificity, and subreddit diversity. Avoid promotional or repetitive replies.",
+      args.warmupMode === "all_warmup" ? WARMUP_PROMPT_NOTE : "",
       args.extraNotes ? `Selection notes JSON: ${args.extraNotes}` : "",
       `Project intelligence JSON: ${compactIntelligenceJson(args.intelligenceJson, "judge")}`,
       `Last 7 days performance JSON: ${JSON.stringify(args.performance)}`,
@@ -132,6 +135,7 @@ export const selectFinalReplies = internalAction({
         targetCount,
         intelligenceJson: context.brand.intelligenceJson,
         performance: context.performance,
+        warmupMode: context.project.warmupMode,
       })
       return sanitizeReplySelection(args.drafts, selectedIndices, targetCount)
     }
@@ -155,6 +159,7 @@ export const selectFinalReplies = internalAction({
       prompt: [
         `Advise the final selector on the best ${targetCount} reply cards for today.`,
         "Favor high-opportunity replies, coverage across communities, and low risk of sounding promotional.",
+        context.project.warmupMode === "all_warmup" ? WARMUP_PROMPT_NOTE : "",
         `Consolidator notes: ${consolidator.object.notes}`,
         `Last 7 days performance JSON: ${JSON.stringify(context.performance)}`,
       ].join("\n\n"),
@@ -168,6 +173,7 @@ export const selectFinalReplies = internalAction({
         consolidator: consolidator.object.notes,
         advisory: advisory.object.notes,
       }),
+      warmupMode: context.project.warmupMode,
     })
 
     return sanitizeReplySelection(args.drafts, selectedIndices, targetCount)

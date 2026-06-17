@@ -2,18 +2,32 @@ import { v } from "convex/values"
 import { api, internal } from "./_generated/api"
 import {
   action,
+  internalAction,
   internalMutation,
+  internalQuery,
   query,
+  type ActionCtx,
   type MutationCtx,
   type QueryCtx,
 } from "./_generated/server"
-import type { Id } from "./_generated/dataModel"
+import type { Doc, Id } from "./_generated/dataModel"
 import { getPlanLimits } from "./lib/planLimits"
+import {
+  REDDIT_WARMUP_ACCOUNT_AGE_DAYS,
+  REDDIT_WARMUP_TOTAL_KARMA,
+  decideRedditActivityStatus,
+  isReadyRedditAccount,
+  isUsableRedditAccount,
+  normalizeRedditUserProfile,
+  normalizeSubredditName,
+} from "./lib/accountSafety"
+import { userProfile } from "./lib/fetchLayer"
 import {
   createZernioProfile,
   deleteZernioProfile,
   getAccountDetails,
   getAccountHealth,
+  getRedditSubreddits,
   normalizeAccountHealth,
   zernioAccountId,
   zernioAccountProfileId,
@@ -76,6 +90,79 @@ async function loadActiveProjectAccounts(
   }
 
   return activeAccounts
+}
+
+function textFrom(value: unknown) {
+  return typeof value === "string" ? value.trim() : undefined
+}
+
+function arrayFromSubredditPayload(payload: unknown): Array<Record<string, unknown>> {
+  if (Array.isArray(payload)) return payload.filter((item): item is Record<string, unknown> => (
+    item !== null && typeof item === "object" && !Array.isArray(item)
+  ))
+  if (!payload || typeof payload !== "object") return []
+  const record = payload as Record<string, unknown>
+  for (const key of ["subreddits", "communities", "results", "data"]) {
+    const value = record[key]
+    if (Array.isArray(value)) return arrayFromSubredditPayload(value)
+  }
+  return []
+}
+
+function accessBySubreddit(payload: unknown) {
+  const access = new Map<string, { canPost: boolean; reason?: string }>()
+  for (const item of arrayFromSubredditPayload(payload)) {
+    const name = textFrom(
+      item.name ?? item.displayName ?? item.display_name ?? item.subreddit,
+    )
+    if (!name) continue
+    const subreddit = normalizeSubredditName(name)
+    const explicitCanPost = item.canPost ?? item.can_post ?? item.postable ?? item.allowed
+    const canPost = typeof explicitCanPost === "boolean" ? explicitCanPost : false
+    const reason = textFrom(item.reason ?? item.issue ?? item.status)
+    access.set(subreddit, { canPost, reason })
+  }
+  return access
+}
+
+function sanitizedErrorSummary(error: unknown) {
+  const type = error instanceof Error
+    ? (error.name || "Error")
+    : error === null
+      ? "null"
+      : Array.isArray(error)
+        ? "array"
+        : typeof error
+  const status = statusFromError(error)
+  return status === undefined ? { type } : { type, status }
+}
+
+function statusFromError(error: unknown) {
+  if (!error || typeof error !== "object") return undefined
+  const record = error as Record<string, unknown>
+  const status = record.status ?? record.statusCode
+  if (typeof status === "number") return status
+  const response = record.response
+  if (response && typeof response === "object") {
+    const responseStatus = (response as Record<string, unknown>).status
+    if (typeof responseStatus === "number") return responseStatus
+  }
+  return undefined
+}
+
+function summarizeWarmupMode(accounts: Doc<"redditAccounts">[]) {
+  const usable = accounts.filter(isUsableRedditAccount)
+  const ready = usable.filter(isReadyRedditAccount)
+  const warmup = usable.filter((account) => !isReadyRedditAccount(account))
+  const mode = usable.length === 0
+    ? "none"
+    : ready.length === 0
+      ? "all_warmup"
+      : warmup.length > 0
+        ? "partial_warmup"
+        : "ready"
+
+  return { mode, usable, ready, warmup }
 }
 
 export const getConnectContext = query({
@@ -197,15 +284,20 @@ export const completeZernioAccountConnect = action({
     }
 
     const providerHealth = normalizeAccountHealth(await healthPromise)
-    return await ctx.runMutation(internal.reddit.upsertZernioAccount, {
-      projectId: args.projectId,
-      redditUsername,
-      zernioAccountId: args.zernioAccountId,
-      providerHealthStatus: providerHealth.status,
-      providerCanPost: providerHealth.canPost,
-      providerNeedsReconnect: providerHealth.needsReconnect,
-      providerIssues: providerHealth.issues,
-    })
+    const result: { redditAccountId: Id<"redditAccounts"> } = await ctx.runMutation(
+      internal.reddit.upsertZernioAccount,
+      {
+        projectId: args.projectId,
+        redditUsername,
+        zernioAccountId: args.zernioAccountId,
+        providerHealthStatus: providerHealth.status,
+        providerCanPost: providerHealth.canPost,
+        providerNeedsReconnect: providerHealth.needsReconnect,
+        providerIssues: providerHealth.issues,
+      },
+    )
+    await refreshAccountSafetyData(ctx, result.redditAccountId)
+    return result
   },
 })
 
@@ -344,5 +436,337 @@ export const updateProviderHealth = internalMutation({
       providerIssues: args.providerIssues,
       providerLastCheckedAt: Date.now(),
     })
+  },
+})
+
+export const getWarmupStatus = query({
+  args: {},
+  handler: async (ctx) => {
+    const identity = await ctx.auth.getUserIdentity()
+    if (!identity) return null
+
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_clerkId", (q) => q.eq("clerkId", identity.subject))
+      .unique()
+    if (!user) return null
+
+    const project = await ctx.db
+      .query("projects")
+      .withIndex("by_userId", (q) => q.eq("userId", user._id))
+      .first()
+    if (!project) return null
+
+    const accounts = await ctx.db
+      .query("redditAccounts")
+      .withIndex("by_projectId", (q) => q.eq("projectId", project._id))
+      .take(50)
+    const activeAccounts = accounts.filter((account) => account.isActive)
+    const summary = summarizeWarmupMode(accounts)
+
+    return {
+      projectId: project._id,
+      mode: summary.mode,
+      thresholds: {
+        totalKarma: REDDIT_WARMUP_TOTAL_KARMA,
+        accountAgeDays: REDDIT_WARMUP_ACCOUNT_AGE_DAYS,
+      },
+      affectedAccounts: activeAccounts
+        .filter((account) => account.activityStatus !== "ready")
+        .map((account) => ({
+          _id: account._id,
+          redditUsername: account.redditUsername,
+          activityStatus: account.activityStatus ?? "warmup",
+          totalKarma: account.totalKarma ?? null,
+          postKarma: account.postKarma ?? null,
+          commentKarma: account.commentKarma ?? null,
+          accountCreatedAt: account.accountCreatedAt ?? null,
+          activityCheckedAt: account.activityCheckedAt ?? null,
+          warmupSince: account.warmupSince ?? null,
+          activityIssues: account.activityIssues ?? ["activity_unknown"],
+        })),
+      accounts: activeAccounts.map((account) => ({
+        _id: account._id,
+        redditUsername: account.redditUsername,
+        activityStatus: account.activityStatus ?? "warmup",
+        totalKarma: account.totalKarma ?? null,
+        accountCreatedAt: account.accountCreatedAt ?? null,
+        activityCheckedAt: account.activityCheckedAt ?? null,
+      })),
+    }
+  },
+})
+
+export const loadAccountSafetySyncTarget = internalQuery({
+  args: {
+    redditAccountId: v.id("redditAccounts"),
+  },
+  handler: async (ctx, args) => {
+    const account = await ctx.db.get(args.redditAccountId)
+    if (!account) return null
+    const subreddits = await ctx.db
+      .query("subreddits")
+      .withIndex("by_projectId_active", (q) =>
+        q.eq("projectId", account.projectId).eq("active", true),
+      )
+      .take(100)
+
+    return {
+      account: {
+        _id: account._id,
+        projectId: account.projectId,
+        redditUsername: account.redditUsername,
+        zernioAccountId: account.zernioAccountId,
+        warmupSince: account.warmupSince ?? null,
+      },
+      subreddits: subreddits.map((subreddit) => normalizeSubredditName(subreddit.name)),
+    }
+  },
+})
+
+export const loadProjectSafetySyncTargets = internalQuery({
+  args: {
+    projectId: v.id("projects"),
+  },
+  handler: async (ctx, args) => {
+    const accounts = await ctx.db
+      .query("redditAccounts")
+      .withIndex("by_projectId", (q) => q.eq("projectId", args.projectId))
+      .take(50)
+    return accounts
+      .filter((account) => account.isActive)
+      .map((account) => account._id)
+  },
+})
+
+export const pageProjectsForSafetySync = internalQuery({
+  args: {
+    planStatus: v.union(v.literal("trialing"), v.literal("active")),
+    cursor: v.union(v.string(), v.null()),
+  },
+  handler: async (ctx, args) => {
+    const page = await ctx.db
+      .query("projects")
+      .withIndex("by_planStatus", (q) => q.eq("planStatus", args.planStatus))
+      .paginate({ numItems: 200, cursor: args.cursor })
+    return {
+      projectIds: page.page.map((project) => project._id),
+      cursor: page.isDone ? null : page.continueCursor,
+    }
+  },
+})
+
+export const saveAccountActivity = internalMutation({
+  args: {
+    redditAccountId: v.id("redditAccounts"),
+    activityStatus: v.union(v.literal("ready"), v.literal("warmup")),
+    totalKarma: v.optional(v.number()),
+    postKarma: v.optional(v.number()),
+    commentKarma: v.optional(v.number()),
+    accountCreatedAt: v.optional(v.number()),
+    activityIssues: v.array(v.string()),
+    checkedAt: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const account = await ctx.db.get(args.redditAccountId)
+    if (!account) return null
+    const wasWarmup = account.activityStatus !== "ready"
+    await ctx.db.patch(args.redditAccountId, {
+      activityStatus: args.activityStatus,
+      totalKarma: args.totalKarma,
+      postKarma: args.postKarma,
+      commentKarma: args.commentKarma,
+      accountCreatedAt: args.accountCreatedAt,
+      activityCheckedAt: args.checkedAt,
+      activityIssues: args.activityIssues,
+      warmupSince: args.activityStatus === "warmup"
+        ? (account.warmupSince ?? args.checkedAt)
+        : wasWarmup ? undefined : account.warmupSince,
+    })
+    return null
+  },
+})
+
+export const saveSubredditAccessRows = internalMutation({
+  args: {
+    redditAccountId: v.id("redditAccounts"),
+    projectId: v.id("projects"),
+    rows: v.array(v.object({
+      subreddit: v.string(),
+      canPost: v.boolean(),
+      reason: v.optional(v.string()),
+    })),
+    checkedAt: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const account = await ctx.db.get(args.redditAccountId)
+    if (!account || account.projectId !== args.projectId) return null
+
+    for (const row of args.rows) {
+      const subreddit = normalizeSubredditName(row.subreddit)
+      const existing = await ctx.db
+        .query("redditSubredditAccess")
+        .withIndex("by_projectId_and_redditAccountId_and_subreddit", (q) =>
+          q
+            .eq("projectId", args.projectId)
+            .eq("redditAccountId", args.redditAccountId)
+            .eq("subreddit", subreddit),
+        )
+        .unique()
+      const patch = {
+        projectId: args.projectId,
+        redditAccountId: args.redditAccountId,
+        subreddit,
+        canPost: row.canPost,
+        checkedAt: args.checkedAt,
+        reason: row.reason,
+      }
+      if (existing) {
+        await ctx.db.patch(existing._id, patch)
+      } else {
+        await ctx.db.insert("redditSubredditAccess", patch)
+      }
+    }
+
+    return null
+  },
+})
+
+async function refreshAccountSafetyData(
+  ctx: ActionCtx,
+  redditAccountId: Id<"redditAccounts">,
+) {
+  const target: {
+    account: {
+      _id: Id<"redditAccounts">
+      projectId: Id<"projects">
+      redditUsername: string
+      zernioAccountId: string
+      warmupSince: number | null
+    }
+    subreddits: string[]
+  } | null = await ctx.runQuery(internal.reddit.loadAccountSafetySyncTarget, {
+    redditAccountId,
+  })
+  if (!target) return null
+
+  const checkedAt = Date.now()
+  const [profileResult, subredditsResult] = await Promise.allSettled([
+    userProfile(ctx, target.account.redditUsername),
+    target.subreddits.length > 0
+      ? getRedditSubreddits(ctx, target.account.zernioAccountId)
+      : Promise.resolve(null),
+  ])
+
+  try {
+    if (profileResult.status === "rejected") throw profileResult.reason
+    const profile = normalizeRedditUserProfile(profileResult.value)
+    const decision = decideRedditActivityStatus(profile, checkedAt)
+    await ctx.runMutation(internal.reddit.saveAccountActivity, {
+      redditAccountId,
+      activityStatus: decision.activityStatus,
+      totalKarma: decision.totalKarma,
+      postKarma: decision.postKarma,
+      commentKarma: decision.commentKarma,
+      accountCreatedAt: decision.accountCreatedAt,
+      activityIssues: decision.activityIssues,
+      checkedAt,
+    })
+  } catch (error) {
+    console.warn("Reddit activity sync failed", redditAccountId, sanitizedErrorSummary(error))
+    await ctx.runMutation(internal.reddit.saveAccountActivity, {
+      redditAccountId,
+      activityStatus: "warmup",
+      activityIssues: ["activity_sync_failed"],
+      checkedAt,
+    })
+  }
+
+  if (target.subreddits.length === 0) return null
+
+  try {
+    if (subredditsResult.status === "rejected") throw subredditsResult.reason
+    const access = accessBySubreddit(subredditsResult.value)
+    await ctx.runMutation(internal.reddit.saveSubredditAccessRows, {
+      redditAccountId,
+      projectId: target.account.projectId,
+      checkedAt,
+      rows: target.subreddits.map((subreddit) => {
+        const row = access.get(subreddit)
+        return {
+          subreddit,
+          canPost: row?.canPost === true,
+          reason: row?.canPost === true
+            ? row.reason
+            : (row?.reason ?? "not_available_for_account"),
+        }
+      }),
+    })
+  } catch (error) {
+    console.warn("Reddit subreddit access sync failed", redditAccountId, sanitizedErrorSummary(error))
+    await ctx.runMutation(internal.reddit.saveSubredditAccessRows, {
+      redditAccountId,
+      projectId: target.account.projectId,
+      checkedAt,
+      rows: target.subreddits.map((subreddit) => ({
+        subreddit,
+        canPost: false,
+        reason: "access_sync_failed",
+      })),
+    })
+  }
+
+  return null
+}
+
+export const refreshRedditAccountSafety = internalAction({
+  args: {
+    redditAccountId: v.id("redditAccounts"),
+  },
+  handler: async (ctx, args) => {
+    return await refreshAccountSafetyData(ctx, args.redditAccountId)
+  },
+})
+
+export const refreshProjectSubredditAccess = internalAction({
+  args: {
+    projectId: v.id("projects"),
+  },
+  handler: async (ctx, args) => {
+    const accountIds: Id<"redditAccounts">[] = await ctx.runQuery(
+      internal.reddit.loadProjectSafetySyncTargets,
+      { projectId: args.projectId },
+    )
+    for (const accountId of accountIds) {
+      await refreshAccountSafetyData(ctx, accountId)
+    }
+    return null
+  },
+})
+
+export const refreshAllRedditSafety = internalAction({
+  args: {},
+  handler: async (ctx) => {
+    const statuses: Array<"active" | "trialing"> = ["active", "trialing"]
+    for (const planStatus of statuses) {
+      let cursor: string | null = null
+      do {
+        const page: { projectIds: Id<"projects">[]; cursor: string | null } = await ctx.runQuery(
+          internal.reddit.pageProjectsForSafetySync,
+          { planStatus, cursor },
+        )
+        for (const projectId of page.projectIds) {
+          const accountIds: Id<"redditAccounts">[] = await ctx.runQuery(
+            internal.reddit.loadProjectSafetySyncTargets,
+            { projectId },
+          )
+          await Promise.all(accountIds.map((accountId) =>
+            refreshAccountSafetyData(ctx, accountId),
+          ))
+        }
+        cursor = page.cursor
+      } while (cursor !== null)
+    }
+    return null
   },
 })

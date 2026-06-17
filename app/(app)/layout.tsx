@@ -9,6 +9,7 @@ import { BillingOverlay } from "@/components/billing-overlay"
 import { AppShellEffects } from "@/components/app-shell-effects"
 import { NotificationBanner } from "@/components/notification-banner"
 import { Sidebar } from "@/components/sidebar"
+import { WarmupDialog } from "@/components/warmup-dialog"
 
 function OnboardingGate({ children }: { children: ReactNode }) {
   const router = useRouter()
@@ -44,6 +45,7 @@ export default function AppLayout({ children }: { children: ReactNode }) {
       <div className="min-h-screen bg-background">
         <Sidebar />
         <AppShellEffects />
+        <WarmupDialog />
 
         {/* Main content */}
         <div className="lg:pl-[240px]">

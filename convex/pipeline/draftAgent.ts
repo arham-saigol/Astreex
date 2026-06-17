@@ -5,6 +5,7 @@ import { v } from "convex/values"
 import { z } from "zod"
 import { internal } from "../_generated/api"
 import { internalAction } from "../_generated/server"
+import { WARMUP_PROMPT_NOTE } from "../lib/accountSafety"
 import {
   deepseekHighReasoningOptions,
   deepseekV4Pro,
@@ -60,6 +61,7 @@ export const generateSingleReply = internalAction({
       prompt: [
         "Draft one helpful Reddit reply for a B2B founder.",
         "Keep it specific, conversational, and non-promotional. Do not include links unless the post explicitly asks for resources.",
+        context.safety.warmupMode === "all_warmup" ? WARMUP_PROMPT_NOTE : "",
         args.scoutRationale ? `Scout rationale: ${args.scoutRationale}` : "",
         args.opportunityRationale
           ? `Opportunity rationale: ${args.opportunityRationale}`
@@ -106,6 +108,7 @@ export const generateSingleOriginalPost = internalAction({
       prompt: [
         "Draft one original Reddit post for a B2B founder.",
         "Make it useful as a standalone community post, not an ad. Avoid links, sales language, and product announcements.",
+        context.safety.warmupMode === "all_warmup" ? WARMUP_PROMPT_NOTE : "",
         `Project intelligence JSON: ${compactIntelligenceJson(context.brand.intelligenceJson, "original")}`,
         `Subreddit context JSON: ${JSON.stringify(context.subreddit)}`,
       ].join("\n\n"),
@@ -159,6 +162,7 @@ export const generateOriginalPostFromBrief = internalAction({
         "Draft one original Reddit post for a B2B founder from this approved post brief.",
         "Make it useful as a standalone community post, not an ad. Avoid links, sales language, product announcements, fake vulnerability, and engagement bait.",
         "The title must fit the target subreddit. The body should provide a concrete observation, framework, story, or useful question that invites discussion.",
+        context.safety.warmupMode === "all_warmup" ? WARMUP_PROMPT_NOTE : "",
         `Project intelligence JSON: ${compactIntelligenceJson(context.brand.intelligenceJson, "original")}`,
         `Subreddit context JSON: ${JSON.stringify(context.subreddit)}`,
         `Post brief JSON: ${originalBriefPrompt(args.brief)}`,
@@ -217,6 +221,7 @@ export const rewriteOriginalPostFromBrief = internalAction({
       prompt: [
         "Rewrite this original Reddit post so it is safer, more useful, and better fit for the subreddit.",
         "Keep it non-promotional. Avoid links, sales language, product announcements, fake vulnerability, and engagement bait.",
+        context.safety.warmupMode === "all_warmup" ? WARMUP_PROMPT_NOTE : "",
         `Rewrite instructions: ${args.rewriteInstructions}`,
         `Project intelligence JSON: ${compactIntelligenceJson(context.brand.intelligenceJson, "original")}`,
         `Subreddit context JSON: ${JSON.stringify(context.subreddit)}`,

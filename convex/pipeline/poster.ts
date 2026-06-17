@@ -7,6 +7,7 @@ import {
   internalQuery,
   type ActionCtx,
 } from "../_generated/server"
+import { isUsableRedditAccount, normalizeSubredditName } from "../lib/accountSafety"
 import { ProviderHttpError } from "../lib/providerHttp"
 import {
   createRedditPost,
@@ -33,6 +34,7 @@ type PostContext = {
   card: Doc<"cards">
   project: Doc<"projects">
   assignedAccount: AccountContext | null
+  assignedAccountCanPost: boolean
   surfacedPost: Doc<"surfacedPosts"> | null
 }
 
@@ -207,13 +209,15 @@ export const postToReddit = internalAction({
       !account.isActive ||
       account.healthStatus !== "healthy" ||
       account.providerCanPost === false ||
-      account.providerNeedsReconnect === true
+      account.providerNeedsReconnect === true ||
+      !context.assignedAccountCanPost
     ) {
       const replacement: AccountContext | null = await ctx.runQuery(
         internal.pipeline.poster.chooseHealthyReplacementAccount,
         {
           projectId: context.card.projectId,
           currentRedditAccountId: context.card.redditAccountId,
+          targetSubreddit: context.card.targetSubreddit,
         },
       )
 
@@ -427,9 +431,25 @@ export const loadPostContext = internalQuery({
 
     if (!project) return null
 
+    const targetSubreddit = card.targetSubreddit
+      ? normalizeSubredditName(card.targetSubreddit)
+      : null
+    const assignedAccess = assignedAccount && targetSubreddit
+      ? await ctx.db
+        .query("redditSubredditAccess")
+        .withIndex("by_projectId_and_redditAccountId_and_subreddit", (q) =>
+          q
+            .eq("projectId", card.projectId)
+            .eq("redditAccountId", assignedAccount._id)
+            .eq("subreddit", targetSubreddit),
+        )
+        .unique()
+      : null
+
     return {
       card,
       project,
+      assignedAccountCanPost: assignedAccess?.canPost === true,
       assignedAccount: assignedAccount
         ? {
             _id: assignedAccount._id,
@@ -450,6 +470,7 @@ export const chooseHealthyReplacementAccount = internalQuery({
   args: {
     projectId: v.id("projects"),
     currentRedditAccountId: v.id("redditAccounts"),
+    targetSubreddit: v.optional(v.union(v.string(), v.null())),
   },
   handler: async (ctx, args) => {
     const accounts = await ctx.db
@@ -457,13 +478,26 @@ export const chooseHealthyReplacementAccount = internalQuery({
       .withIndex("by_projectId", (q) => q.eq("projectId", args.projectId))
       .take(50)
 
+    const subreddit = args.targetSubreddit
+      ? normalizeSubredditName(args.targetSubreddit)
+      : null
+    const accessRows = subreddit
+      ? await ctx.db
+        .query("redditSubredditAccess")
+        .withIndex("by_projectId_and_subreddit", (q) =>
+          q.eq("projectId", args.projectId).eq("subreddit", subreddit),
+        )
+        .take(50)
+      : []
+    const postableAccountIds = new Set(
+      accessRows.filter((row) => row.canPost).map((row) => row.redditAccountId),
+    )
+
     const replacement = accounts.find(
       (account) =>
         account._id !== args.currentRedditAccountId &&
-        account.isActive &&
-        account.healthStatus === "healthy" &&
-        account.providerCanPost !== false &&
-        account.providerNeedsReconnect !== true,
+        isUsableRedditAccount(account) &&
+        (!subreddit || postableAccountIds.has(account._id)),
     )
 
     if (!replacement) return null

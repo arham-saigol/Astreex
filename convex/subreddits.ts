@@ -38,13 +38,59 @@ export const getSubreddits = query({
       .withIndex("by_projectId", (q) => q.eq("projectId", project._id))
       .take(200)
 
+    const accounts = await ctx.db
+      .query("redditAccounts")
+      .withIndex("by_projectId", (q) => q.eq("projectId", project._id))
+      .take(50)
+    const activeAccounts = accounts.filter((account) => account.isActive)
+
+    const accessRows = await Promise.all(subreddits.map((subreddit) =>
+      ctx.db
+        .query("redditSubredditAccess")
+        .withIndex("by_projectId_and_subreddit", (q) =>
+          q.eq("projectId", project._id).eq("subreddit", subreddit.name.toLowerCase()),
+        )
+        .take(50),
+    ))
+    const activeAccountIds = new Set(activeAccounts.map((account) => account._id))
+    const usernameById = new Map(activeAccounts.map((account) => [
+      account._id,
+      account.redditUsername,
+    ]))
+
+    const enrichedSubreddits = subreddits.map((subreddit, index) => {
+      const rows = accessRows[index].filter((row) => activeAccountIds.has(row.redditAccountId))
+      const postableAccountUsernames = rows
+        .filter((row) => row.canPost)
+        .map((row) => usernameById.get(row.redditAccountId))
+        .filter((username): username is string => Boolean(username))
+      const blockedAccountUsernames = rows
+        .filter((row) => !row.canPost)
+        .map((row) => usernameById.get(row.redditAccountId))
+        .filter((username): username is string => Boolean(username))
+      const checkedAccountIds = new Set(rows.map((row) => row.redditAccountId))
+      const hasPendingSync = activeAccounts.some((account) => !checkedAccountIds.has(account._id))
+      const postingAccessStatus = postableAccountUsernames.length > 0
+        ? "postable"
+        : hasPendingSync
+          ? "unknown"
+          : "blocked"
+
+      return {
+        ...subreddit,
+        postingAccessStatus,
+        postableAccountUsernames,
+        blockedAccountUsernames,
+      }
+    })
+
     // Sort by relevance descending, inactive at end
-    subreddits.sort((a, b) => {
+    enrichedSubreddits.sort((a, b) => {
       if (a.active !== b.active) return a.active ? -1 : 1
       return b.relevanceScore - a.relevanceScore
     })
 
-    return subreddits
+    return enrichedSubreddits
   },
 })
 
@@ -299,12 +345,20 @@ export const addSubreddit = action({
       details.description ??
       undefined
 
-    return await ctx.runMutation(internal.subreddits.insertManualSubreddit, {
+    const result = await ctx.runMutation(internal.subreddits.insertManualSubreddit, {
       projectId: context.projectId as never,
       name: context.cleanName,
       memberCount,
       description: description?.slice(0, 1000),
       rulesJson: details.rules === undefined ? undefined : stringifyRulesJson(details.rules),
     })
+    try {
+      await ctx.runAction(internal.reddit.refreshProjectSubredditAccess, {
+        projectId: context.projectId as never,
+      })
+    } catch {
+      console.warn("Subreddit access refresh failed after manual add")
+    }
+    return result
   },
 })

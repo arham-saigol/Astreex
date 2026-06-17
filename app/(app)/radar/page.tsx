@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useCallback, useRef } from "react"
+import { useState, useEffect, useCallback, useMemo, useRef } from "react"
 import { useAction, useQuery, useMutation } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
@@ -18,6 +18,24 @@ function relevanceDotColor(score: number) {
   if (score >= 50) return "#D4932A"
   if (score >= 20) return "#C9524A"
   return "#9C9590"
+}
+
+function postingAccessDotColor(status?: Subreddit["postingAccessStatus"]) {
+  if (status === "postable") return "#3D9A5F"
+  if (status === "blocked") return "#C9524A"
+  return "#D4932A"
+}
+
+function postingAccessLabel(sub: Subreddit) {
+  if (sub.postingAccessStatus === "postable") {
+    return sub.postableAccountUsernames?.length
+      ? `Can post with u/${sub.postableAccountUsernames.join(", u/")}`
+      : "At least one account can post here"
+  }
+  if (sub.postingAccessStatus === "blocked") {
+    return "Your current Reddit account does not have enough activity to post here yet."
+  }
+  return "Posting access sync is pending."
 }
 
 function abbreviateCount(count: number | undefined): string {
@@ -52,6 +70,9 @@ type Subreddit = {
   addedBy: "agent" | "user"
   createdAt: number
   pending?: boolean
+  postingAccessStatus?: "postable" | "blocked" | "unknown"
+  postableAccountUsernames?: string[]
+  blockedAccountUsernames?: string[]
 }
 
 type RadarStatus = {
@@ -121,13 +142,14 @@ function SubredditRow({
       )}
       style={{ height: 56, minHeight: 44 }}
     >
-      {/* Relevance dot */}
+      {/* Posting access dot */}
       <span
         className="shrink-0 rounded-full"
+        title={postingAccessLabel(sub)}
         style={{
           width: 8,
           height: 8,
-          backgroundColor: relevanceDotColor(sub.relevanceScore),
+          backgroundColor: postingAccessDotColor(sub.postingAccessStatus),
         }}
       />
 
@@ -259,6 +281,11 @@ function PanelContent({
           </dd>
         </div>
       </dl>
+
+      <div className="mt-6 rounded-lg border border-border/60 bg-muted/40 p-4 text-sm text-text-secondary">
+        <div className="mb-1 font-medium text-text-primary">Posting access</div>
+        <p>{postingAccessLabel(sub)}</p>
+      </div>
 
       {/* Reasoning */}
       {sub.reasoning && (
@@ -409,8 +436,12 @@ export default function RadarPage() {
   >({})
   const [optimisticAdds, setOptimisticAdds] = useState<Subreddit[]>([])
 
+  const remoteSubreddits = useMemo(
+    () => (subreddits ?? []) as Subreddit[],
+    [subreddits],
+  )
   const selectedSub =
-    [...(subreddits ?? []), ...optimisticAdds].find((s) => s._id === selectedId) ??
+    [...remoteSubreddits, ...optimisticAdds].find((s) => s._id === selectedId) ??
     null
 
   const handleToggle = useCallback(
@@ -420,7 +451,7 @@ export default function RadarPage() {
       // Check minimum before optimistic update
       if (!newActive) {
         const currentActive =
-          subreddits?.filter((s: Subreddit) => {
+          remoteSubreddits.filter((s) => {
             const opt = optimisticToggles[s._id]
             return opt !== undefined ? opt : s.active
           }).length ?? 0
@@ -454,16 +485,16 @@ export default function RadarPage() {
         }
       }
     },
-    [subreddits, optimisticToggles, toggleSubreddit]
+    [remoteSubreddits, optimisticToggles, toggleSubreddit]
   )
 
   // Apply optimistic toggles to render list
   const displayList = [
-    ...(subreddits ?? []),
+    ...remoteSubreddits,
     ...optimisticAdds.filter(
       (optimistic) =>
-        !(subreddits ?? []).some(
-          (subreddit: Subreddit) =>
+        !remoteSubreddits.some(
+          (subreddit) =>
             subreddit._id === optimistic._id || subreddit.name === optimistic.name,
         ),
     ),
@@ -508,7 +539,7 @@ export default function RadarPage() {
   }
 
   // Empty state
-  if (subreddits.length === 0 && optimisticAdds.length === 0 && !showAddInput) {
+  if (remoteSubreddits.length === 0 && optimisticAdds.length === 0 && !showAddInput) {
     return (
       <div className="space-y-6">
         <div className="flex items-center justify-between">
