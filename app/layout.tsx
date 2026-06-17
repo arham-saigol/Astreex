@@ -1,18 +1,18 @@
 import type { Metadata } from "next"
-import { Geist_Mono, Inter, Newsreader } from "next/font/google"
+import { EB_Garamond, Figtree, Geist_Mono } from "next/font/google"
 
 import { AppProviders } from "@/components/providers"
 
 import "./globals.css"
 
-const inter = Inter({
-  variable: "--font-inter",
+const figtree = Figtree({
+  variable: "--font-figtree",
   subsets: ["latin"],
   display: "swap",
 })
 
-const newsreader = Newsreader({
-  variable: "--font-newsreader",
+const ebGaramond = EB_Garamond({
+  variable: "--font-eb-garamond",
   subsets: ["latin"],
   display: "swap",
 })
@@ -57,7 +57,7 @@ export default function RootLayout({
     <html
       lang="en"
       suppressHydrationWarning
-      className={`${inter.variable} ${newsreader.variable} ${commitMono.variable}`}
+      className={`${figtree.variable} ${ebGaramond.variable} ${commitMono.variable}`}
     >
       <body className="min-h-screen bg-background text-foreground antialiased">
         <AppProviders>{children}</AppProviders>
