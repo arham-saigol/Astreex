@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect, useCallback } from "react"
-import { useRouter } from "next/navigation"
+import { useRouter, useSearchParams } from "next/navigation"
 import { useMutation, useQuery } from "convex/react"
 import { motion, AnimatePresence } from "framer-motion"
 import { toast } from "sonner"
@@ -22,16 +22,20 @@ export interface OnboardingData {
   redditAccounts: { username: string; isActive: boolean }[]
   timezone: string
   projectId: Id<"projects"> | null
+  projectRef: string | null
 }
 
 const TOTAL_STEPS = 4
 
 export default function OnboardingPage() {
   const router = useRouter()
+  const searchParams = useSearchParams()
+  const isNewProject = searchParams.get("new") === "1"
   const status = useQuery(api.onboarding.getOnboardingStatus)
   const draft = useQuery(api.onboarding.getOnboardingDraft)
   const prepareOnboardingProject = useMutation(api.onboarding.prepareOnboardingProject)
   const completeOnboarding = useMutation(api.onboarding.completeOnboarding)
+  const skipInitialProjectOnboarding = useMutation(api.projects.skipInitialProjectOnboarding)
 
   const [step, setStep] = useState(1)
   const [direction, setDirection] = useState(1)
@@ -48,14 +52,17 @@ export default function OnboardingPage() {
     redditAccounts: [],
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     projectId: null,
+    projectRef: null,
   })
 
-  // Redirect if already onboarded
+  // Redirect only if normal onboarding is complete. /onboarding?new=1 always creates a project.
   useEffect(() => {
-    if (status?.hasCompletedOnboarding) {
+    const hasFinishedOnboarding =
+      status?.hasCompletedOnboarding || status?.skippedInitialOnboarding
+    if (!isNewProject && hasFinishedOnboarding) {
       router.replace("/dashboard")
     }
-  }, [status, router])
+  }, [isNewProject, status, router])
 
   useEffect(() => {
     const searchParams = new URLSearchParams(window.location.search)
@@ -64,7 +71,13 @@ export default function OnboardingPage() {
     }
     if (searchParams.get("reddit_error")) {
       toast.error("Reddit connection failed. Please try again.")
-      window.history.replaceState(null, "", "/onboarding?step=4")
+      searchParams.delete("reddit_error")
+      const query = searchParams.toString()
+      window.history.replaceState(
+        null,
+        "",
+        `${window.location.pathname}${query ? `?${query}` : ""}`,
+      )
     }
   }, [])
 
@@ -75,6 +88,7 @@ export default function OnboardingPage() {
       setData((prev) => ({
         ...prev,
         projectId: draft.projectId,
+        projectRef: draft.projectRef,
         projectName: draft.projectName,
         websiteUrl: draft.websiteUrl,
         competitorUrls: draft.competitorUrls,
@@ -106,10 +120,11 @@ export default function OnboardingPage() {
       competitorUrls: data.competitorUrls,
       plan: data.plan,
       timezone: data.timezone,
+      newProject: isNewProject,
     })
-    updateData({ projectId: result.projectId })
-    return result.projectId
-  }, [data, prepareOnboardingProject, updateData])
+    updateData({ projectId: result.projectId, projectRef: result.projectRef })
+    return result
+  }, [data, isNewProject, prepareOnboardingProject, updateData])
 
   const handlePlanNext = useCallback(async () => {
     setIsPreparingProject(true)
@@ -126,10 +141,11 @@ export default function OnboardingPage() {
   }, [ensureDraftProject, goNext])
 
   const handleConnectReddit = useCallback(async () => {
-    let projectId = data.projectId
-    if (!projectId) {
+    let projectRef = data.projectRef
+    if (!data.projectId || !projectRef) {
       try {
-        projectId = await ensureDraftProject()
+        const result = await ensureDraftProject()
+        projectRef = result.projectRef
       } catch (error) {
         console.error("Project setup failed:", error)
         const message = error instanceof Error ? error.message : "Project setup failed."
@@ -138,22 +154,19 @@ export default function OnboardingPage() {
         return
       }
     }
-    if (!projectId) return
+    if (!projectRef) return
     window.location.assign(
-      `/api/zernio/reddit/connect?projectId=${encodeURIComponent(projectId)}&returnTo=onboarding`,
+      `/api/zernio/reddit/connect?projectRef=${encodeURIComponent(projectRef)}&returnTo=onboarding`,
     )
-  }, [data.projectId, ensureDraftProject])
+  }, [data.projectId, data.projectRef, ensureDraftProject])
 
   const handleComplete = useCallback(async () => {
     setIsSubmitting(true)
     setSubmitError(null)
     try {
+      if (!data.projectRef) throw new Error("Project setup is incomplete.")
       await completeOnboarding({
-        projectName: data.projectName,
-        websiteUrl: data.websiteUrl,
-        competitorUrls: data.competitorUrls,
-        plan: data.plan,
-        timezone: data.timezone,
+        projectRef: data.projectRef,
       })
       router.replace("/dashboard")
     } catch (error) {
@@ -162,11 +175,16 @@ export default function OnboardingPage() {
     } finally {
       setIsSubmitting(false)
     }
-  }, [completeOnboarding, data, router])
+  }, [completeOnboarding, data.projectRef, router])
 
-  // Show nothing while checking status
-  if (status === undefined || status?.hasCompletedOnboarding) {
-    return null
+  if (status === undefined) {
+    return <div className="h-80 w-full animate-pulse rounded-xl bg-muted" />
+  }
+
+  const hasFinishedOnboarding =
+    status.hasCompletedOnboarding || status.skippedInitialOnboarding
+  if (!isNewProject && hasFinishedOnboarding) {
+    return <div className="h-80 w-full animate-pulse rounded-xl bg-muted" />
   }
 
   const variants = {
@@ -210,6 +228,11 @@ export default function OnboardingPage() {
                 data={data}
                 updateData={updateData}
                 onNext={goNext}
+                showSkip={!isNewProject && status?.hasCreatedProjects === false}
+                onSkip={async () => {
+                  await skipInitialProjectOnboarding()
+                  router.replace("/dashboard")
+                }}
               />
             )}
             {step === 2 && (

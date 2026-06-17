@@ -10,28 +10,27 @@ import {
 import { getPlanLimits } from "./lib/planLimits"
 import { validateSubreddit } from "./lib/zernio"
 import type { Id } from "./_generated/dataModel"
-import { getCurrentProjectOrNull, requireAuthenticatedUser } from "./lib/auth"
+import { requireProjectAccess } from "./lib/auth"
+import { requireProjectAccessByRef } from "./lib/projectRefs"
 
 const SUBREDDIT_LIMIT_ERROR =
   "You've reached the subreddit limit for your plan. Upgrade to add more."
 
 export const getSubreddits = query({
-  args: {},
-  handler: async (ctx) => {
-    const current = await getCurrentProjectOrNull(ctx)
-    if (!current) return []
+  args: { projectRef: v.string() },
+  handler: async (ctx, args) => {
+    const { project } = await requireProjectAccessByRef(ctx, args.projectRef)
 
-    const { project } = current
-
-    const subreddits = await ctx.db
-      .query("subreddits")
-      .withIndex("by_projectId", (q) => q.eq("projectId", project._id))
-      .take(200)
-
-    const accounts = await ctx.db
-      .query("redditAccounts")
-      .withIndex("by_projectId", (q) => q.eq("projectId", project._id))
-      .take(50)
+    const [subreddits, accounts] = await Promise.all([
+      ctx.db
+        .query("subreddits")
+        .withIndex("by_projectId", (q) => q.eq("projectId", project._id))
+        .take(200),
+      ctx.db
+        .query("redditAccounts")
+        .withIndex("by_projectId", (q) => q.eq("projectId", project._id))
+        .take(50),
+    ])
     const activeAccounts = accounts.filter((account) => account.isActive)
 
     const accessRows = await Promise.all(subreddits.map((subreddit) =>
@@ -85,12 +84,9 @@ export const getSubreddits = query({
 })
 
 export const getRadarStatus = query({
-  args: {},
-  handler: async (ctx) => {
-    const current = await getCurrentProjectOrNull(ctx)
-    if (!current) return null
-
-    const { project } = current
+  args: { projectRef: v.string() },
+  handler: async (ctx, args) => {
+    const { project } = await requireProjectAccessByRef(ctx, args.projectRef)
 
     return {
       onboardingStatus: project.onboardingStatus ?? null,
@@ -106,18 +102,10 @@ export const toggleSubreddit = mutation({
     active: v.boolean(),
   },
   handler: async (ctx, args) => {
-    const user = await requireAuthenticatedUser(ctx)
-
     const subreddit = await ctx.db.get(args.subredditId)
     if (!subreddit) throw new Error("Subreddit not found")
 
-    const project = await ctx.db
-      .query("projects")
-      .withIndex("by_userId", (q) => q.eq("userId", user._id))
-      .first()
-    if (!project || subreddit.projectId !== project._id) {
-      throw new Error("Unauthorized")
-    }
+    const project = await requireProjectAccess(ctx, subreddit.projectId)
 
     if (args.active && subreddit.relevanceScore < 20) {
       throw new Error("QUALITY_GATE")
@@ -171,13 +159,11 @@ function validZernioValidation(payload: unknown) {
 
 export const loadManualAddContext = internalQuery({
   args: {
+    projectRef: v.string(),
     name: v.string(),
   },
   handler: async (ctx, args) => {
-    const current = await getCurrentProjectOrNull(ctx)
-    if (!current) throw new Error("No project found")
-
-    const { project } = current
+    const project = (await requireProjectAccessByRef(ctx, args.projectRef)).project
     const cleanName = normalizeSubredditName(args.name)
 
     // Check for duplicate
@@ -269,6 +255,7 @@ export const insertManualSubreddit = internalMutation({
 
 export const addSubreddit = action({
   args: {
+    projectRef: v.string(),
     name: v.string(),
   },
   handler: async (ctx, args): Promise<{
@@ -279,7 +266,7 @@ export const addSubreddit = action({
   }> => {
     const context: { projectId: string; cleanName: string } = await ctx.runQuery(
       internal.subreddits.loadManualAddContext,
-      { name: args.name },
+      { projectRef: args.projectRef, name: args.name },
     )
 
     const validation = await validateSubreddit(ctx, context.cleanName)

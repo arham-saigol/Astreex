@@ -9,6 +9,7 @@ import {
 import { internal } from "./_generated/api"
 import type { Id } from "./_generated/dataModel"
 import { requireAuthenticatedUser, requireOwnedProject } from "./lib/auth"
+import { projectRefFor, requireProjectAccessByRef } from "./lib/projectRefs"
 import { getPlanLimits } from "./lib/planLimits"
 import { reconcileProjectIntelligenceUrls } from "./lib/projectIntelligenceReconciliation"
 import { normalizeHttpUrl, normalizeOptionalHttpUrls } from "./lib/urls"
@@ -66,18 +67,6 @@ async function getOwnedProject(
   return await requireOwnedProject(ctx, projectId)
 }
 
-async function getCurrentProject(ctx: QueryCtx) {
-  const user = await getCurrentUser(ctx)
-  const project = await ctx.db
-    .query("projects")
-    .withIndex("by_userId", (q) => q.eq("userId", user._id))
-    .first()
-
-  if (!project) return null
-
-  return { user, project }
-}
-
 async function deleteProjectRows(
   ctx: MutationCtx,
   projectId: Id<"projects">,
@@ -94,6 +83,8 @@ async function deleteProjectRows(
     "subreddits",
     "redditAccounts",
     "projectIntelligenceProfiles",
+    "projectMemberships",
+    "projectInvitations",
   ] as const
 
   let deletedRows = 0
@@ -126,6 +117,8 @@ async function hasProjectRows(ctx: MutationCtx, projectId: Id<"projects">) {
     "subreddits",
     "redditAccounts",
     "projectIntelligenceProfiles",
+    "projectMemberships",
+    "projectInvitations",
   ] as const
 
   for (const table of tables) {
@@ -171,27 +164,25 @@ async function runDeleteProjectBatch(
 }
 
 export const getSettingsContext = query({
-  args: {},
-  handler: async (ctx) => {
-    const current = await getCurrentProject(ctx)
-    if (!current) return null
-
-    const { user, project } = current
-    const brand = await ctx.db
-      .query("projectIntelligenceProfiles")
-      .withIndex("by_projectId", (q) => q.eq("projectId", project._id))
-      .first()
-    const runningBuild = await ctx.db
-      .query("projectIntelligenceBuilds")
-      .withIndex("by_projectId", (q) => q.eq("projectId", project._id))
-      .order("desc")
-      .take(10)
-      .then((builds) => builds.find((build) => build.status === "running"))
-
-    const redditAccounts = await ctx.db
-      .query("redditAccounts")
-      .withIndex("by_projectId", (q) => q.eq("projectId", project._id))
-      .take(20)
+  args: { projectRef: v.string() },
+  handler: async (ctx, args) => {
+    const { user, project, membership } = await requireProjectAccessByRef(ctx, args.projectRef)
+    const [brand, runningBuild, redditAccounts] = await Promise.all([
+      ctx.db
+        .query("projectIntelligenceProfiles")
+        .withIndex("by_projectId", (q) => q.eq("projectId", project._id))
+        .first(),
+      ctx.db
+        .query("projectIntelligenceBuilds")
+        .withIndex("by_projectId", (q) => q.eq("projectId", project._id))
+        .order("desc")
+        .take(10)
+        .then((builds) => builds.find((build) => build.status === "running")),
+      ctx.db
+        .query("redditAccounts")
+        .withIndex("by_projectId", (q) => q.eq("projectId", project._id))
+        .take(20),
+    ])
     const limits = getPlanLimits(project.plan)
 
     return {
@@ -202,6 +193,7 @@ export const getSettingsContext = query({
       },
       project: {
         _id: project._id,
+        projectRef: projectRefFor(project),
         name: project.name,
         plan: project.plan,
         planStatus: project.planStatus,
@@ -214,6 +206,7 @@ export const getSettingsContext = query({
         cancelAtPeriodEnd: project.cancelAtPeriodEnd ?? false,
         hasCreemCustomer: !!project.creemCustomerId,
         accountLimit: limits.maxRedditAccounts,
+        role: membership.role,
         limits,
       },
       brand: brand

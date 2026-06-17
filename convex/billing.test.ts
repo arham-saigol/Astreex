@@ -42,6 +42,8 @@ async function seedBillingProject(
     })
     const projectId = await ctx.db.insert("projects", {
       userId,
+      publicId: "p_billingtest",
+      slug: "astreex",
       name: "Astreex",
       plan: overrides.plan ?? "growth",
       planStatus: overrides.planStatus ?? "trialing",
@@ -54,7 +56,7 @@ async function seedBillingProject(
       createdAt: Date.now(),
     })
 
-    return { userId, projectId }
+    return { userId, projectId, projectRef: "astreex-p_billingtest" }
   })
 }
 
@@ -261,7 +263,7 @@ describe("Creem webhook handling", () => {
 describe("starter enforcement", () => {
   test("duplicate subreddit detection works past the first 200 rows", async () => {
     const t = convexTest(schema, modules)
-    const { projectId } = await seedBillingProject(t, {
+    const { projectId, projectRef } = await seedBillingProject(t, {
       plan: "scale",
       planStatus: "active",
     })
@@ -291,6 +293,7 @@ describe("starter enforcement", () => {
 
     await expect(
       t.withIdentity({ tokenIdentifier: "test|user_1" }).action(api.subreddits.addSubreddit, {
+        projectRef,
         name: "targetsub",
       }),
     ).rejects.toThrow("DUPLICATE")
@@ -299,7 +302,7 @@ describe("starter enforcement", () => {
   test("starter cannot add a 6th active subreddit", async () => {
     stubRequiredEnv()
     const t = convexTest(schema, modules)
-    const { projectId } = await seedBillingProject(t, {
+    const { projectId, projectRef } = await seedBillingProject(t, {
       plan: "starter",
       planStatus: "active",
     })
@@ -307,6 +310,7 @@ describe("starter enforcement", () => {
 
     await expect(
       t.withIdentity({ tokenIdentifier: "test|user_1" }).action(api.subreddits.addSubreddit, {
+        projectRef,
         name: "founders",
       }),
     ).rejects.toThrow(

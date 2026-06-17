@@ -19,12 +19,12 @@ import {
 export function UpgradeDialog({
   open,
   onOpenChange,
-  projectId,
+  projectRef,
   nonDismissable = false,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
-  projectId: string
+  projectRef: string
   nonDismissable?: boolean
 }) {
   const [interval, setInterval] = useState<PricingInterval>("monthly")
@@ -36,7 +36,7 @@ export function UpgradeDialog({
       const response = await fetch("/api/creem/checkout", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ projectId, plan, interval }),
+        body: JSON.stringify({ projectRef, plan, interval }),
       })
 
       if (!response.ok) {

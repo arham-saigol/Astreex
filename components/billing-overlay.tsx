@@ -5,9 +5,11 @@ import { useQuery } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import { BillingStatusBanner } from "@/components/billing-status-banner"
 import { UpgradeDialog } from "@/components/upgrade-dialog"
+import { useProjectRefFromPath } from "@/hooks/use-project-ref-from-path"
 
 export function BillingOverlay() {
-  const billing = useQuery(api.billing.getProjectBillingStatus)
+  const projectRef = useProjectRefFromPath()
+  const billing = useQuery(api.billing.getProjectBillingStatus, projectRef ? { projectRef } : "skip")
 
   return (
     <>
@@ -16,7 +18,7 @@ export function BillingOverlay() {
         <UpgradeDialog
           open
           onOpenChange={() => {}}
-          projectId={billing.projectId}
+          projectRef={billing.projectRef}
           nonDismissable
         />
       ) : null}

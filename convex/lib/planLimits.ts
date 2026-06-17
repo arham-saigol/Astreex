@@ -111,6 +111,12 @@ export function getPlanLimits(plan: string) {
   }
 }
 
+export function getSeatLimit(plan: string) {
+  if (plan === "scale") return 5
+  if (plan === "growth") return 2
+  return 1
+}
+
 export function getSubredditDiscoveryLimits(plan: string) {
   const limits = getPipelineLimits(
     plan === "growth" || plan === "scale" ? plan : "starter",

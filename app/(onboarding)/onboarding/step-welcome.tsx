@@ -10,9 +10,11 @@ interface Props {
   data: OnboardingData
   updateData: (partial: Partial<OnboardingData>) => void
   onNext: () => void
+  showSkip?: boolean
+  onSkip?: () => void
 }
 
-export function StepWelcome({ data, updateData, onNext }: Props) {
+export function StepWelcome({ data, updateData, onNext, showSkip, onSkip }: Props) {
   const [error, setError] = useState("")
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -53,9 +55,16 @@ export function StepWelcome({ data, updateData, onNext }: Props) {
         {error && <p className="text-xs text-error">{error}</p>}
       </div>
 
-      <Button type="submit" className="w-full" size="lg">
-        Continue
-      </Button>
+      <div className="space-y-2">
+        <Button type="submit" className="w-full" size="lg">
+          Continue
+        </Button>
+        {showSkip ? (
+          <Button type="button" variant="ghost" className="w-full" onClick={onSkip}>
+            Skip for now
+          </Button>
+        ) : null}
+      </div>
     </form>
   )
 }

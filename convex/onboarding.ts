@@ -4,6 +4,7 @@ import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/s
 import type { Doc, Id } from "./_generated/dataModel"
 import { getOrCreateCurrentUser, getCurrentUserOrNull } from "./lib/auth"
 import { getPlanLimits } from "./lib/planLimits"
+import { ensureOwnerMembership, newProjectPublicId, projectRefFor, requireProjectOwnerByRef, slugifyProjectName } from "./lib/projectRefs"
 import { assertValidTimezone } from "./lib/timezones"
 import { normalizeHttpUrl, normalizeOptionalHttpUrls } from "./lib/urls"
 
@@ -44,6 +45,19 @@ type PrepareProjectArgs = {
   competitorUrls?: string[]
   plan: Plan
   timezone: string
+  newProject?: boolean
+}
+
+async function unusedProjectPublicId(ctx: MutationCtx) {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const publicId = newProjectPublicId()
+    const existing = await ctx.db
+      .query("projects")
+      .withIndex("by_publicId", (q) => q.eq("publicId", publicId))
+      .unique()
+    if (!existing) return publicId
+  }
+  throw new Error("Could not generate unique project reference")
 }
 
 async function prepareProject(ctx: MutationCtx, args: PrepareProjectArgs) {
@@ -74,23 +88,32 @@ async function prepareProject(ctx: MutationCtx, args: PrepareProjectArgs) {
 
   const projects = await getUserProjects(ctx, user._id)
   const completeProject = projects.find(isCompleteProject)
-  if (completeProject) {
+  if (completeProject && !args.newProject) {
     throw new Error("Onboarding already completed")
   }
 
-  const project = projects.find((item) => !isCompleteProject(item))
+  const project = args.newProject ? undefined : projects.find((item) => !isCompleteProject(item))
 
   if (!project) {
+    const publicId = await unusedProjectPublicId(ctx)
+    const trialEligible = !user.firstCreatedProjectId
     const projectId = await ctx.db.insert("projects", {
       userId: user._id,
+      publicId,
+      slug: slugifyProjectName(projectName),
       name: projectName,
       plan: args.plan,
-      planStatus: "trialing",
+      planStatus: trialEligible ? "trialing" : "requires_subscription",
       onboardingStatus: "in_progress",
       timezone,
       lastActiveAt: now,
       createdAt: now,
     })
+
+    await ensureOwnerMembership(ctx, projectId, user._id)
+    if (trialEligible) {
+      await ctx.db.patch(user._id, { firstCreatedProjectId: projectId })
+    }
 
     await ctx.db.insert("projectIntelligenceProfiles", {
       projectId,
@@ -101,7 +124,8 @@ async function prepareProject(ctx: MutationCtx, args: PrepareProjectArgs) {
       updatedAt: now,
     })
 
-    return { projectId }
+    const created = await ctx.db.get(projectId)
+    return { projectId, projectRef: created ? projectRefFor(created) : `${slugifyProjectName(projectName)}-${publicId}` }
   }
 
   await ctx.db.patch(project._id, {
@@ -133,7 +157,8 @@ async function prepareProject(ctx: MutationCtx, args: PrepareProjectArgs) {
     })
   }
 
-  return { projectId: project._id }
+  const updated = await ctx.db.get(project._id)
+  return { projectId: project._id, projectRef: updated ? projectRefFor(updated) : projectRefFor(project) }
 }
 
 export const getOnboardingStatus = query({
@@ -150,14 +175,32 @@ export const getOnboardingStatus = query({
       return { isAuthenticated: true, hasCompletedOnboarding: false }
     }
 
-    const projects = await getUserProjects(ctx, user._id)
+    const [projects, memberships] = await Promise.all([
+      getUserProjects(ctx, user._id),
+      ctx.db
+        .query("projectMemberships")
+        .withIndex("by_userId", (q) => q.eq("userId", user._id))
+        .take(100),
+    ])
+    const membershipProjects = await Promise.all(
+      memberships.map((membership) => ctx.db.get(membership.projectId)),
+    )
+    const completedMembershipProjects = membershipProjects.filter(
+      (project): project is Doc<"projects"> => project !== null && isCompleteProject(project),
+    )
     const completeProject = projects.find(isCompleteProject)
     const draftProject = projects.find((project) => !isCompleteProject(project))
+    const hasAccessibleProject = !!completeProject || completedMembershipProjects.length > 0
+    const selectedProject = completeProject ?? completedMembershipProjects[0] ?? draftProject
 
     return {
       isAuthenticated: true,
-      hasCompletedOnboarding: !!completeProject,
-      projectId: (completeProject?._id ?? draftProject?._id) ?? null,
+      hasCompletedOnboarding: hasAccessibleProject || !!user.initialProjectOnboardingSkippedAt,
+      hasProjects: projects.length > 0 || memberships.length > 0,
+      hasCreatedProjects: projects.length > 0,
+      skippedInitialOnboarding: !!user.initialProjectOnboardingSkippedAt,
+      projectId: selectedProject?._id ?? null,
+      projectRef: selectedProject ? projectRefFor(selectedProject) : null,
     }
   },
 })
@@ -184,6 +227,7 @@ export const getOnboardingDraft = query({
 
     return {
       projectId: draftProject._id,
+      projectRef: projectRefFor(draftProject),
       projectName: draftProject.name,
       websiteUrl: brand?.websiteUrl ?? "",
       competitorUrls: brand?.competitorUrls ?? [],
@@ -204,6 +248,7 @@ export const prepareOnboardingProject = mutation({
     competitorUrls: v.optional(v.array(v.string())),
     plan: planValidator,
     timezone: v.string(),
+    newProject: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     return await prepareProject(ctx, args)
@@ -212,17 +257,14 @@ export const prepareOnboardingProject = mutation({
 
 export const completeOnboarding = mutation({
   args: {
-    projectName: v.string(),
-    websiteUrl: v.string(),
-    competitorUrls: v.optional(v.array(v.string())),
-    plan: planValidator,
-    timezone: v.string(),
+    projectRef: v.string(),
   },
   handler: async (ctx, args) => {
-    const prepared = await prepareProject(ctx, args)
-    const projectId = prepared.projectId
-    const project = await ctx.db.get(projectId)
-    if (!project) throw new Error("Project not found")
+    const { project } = await requireProjectOwnerByRef(ctx, args.projectRef)
+    const projectId = project._id
+    if (project.planStatus === "requires_subscription") {
+      throw new Error("Subscribe before completing setup for this project")
+    }
     const accountLimit = planAccountLimit(project.plan)
     const activeRedditAccounts: Doc<"redditAccounts">[] = []
     for await (const account of ctx.db
@@ -246,7 +288,7 @@ export const completeOnboarding = mutation({
     await ctx.db.patch(projectId, {
       onboardingStatus: "running",
       onboardingError: undefined,
-      trialEndsAt: now + sevenDays,
+      trialEndsAt: project.planStatus === "trialing" ? now + sevenDays : project.trialEndsAt,
       lastActiveAt: now,
     })
 
@@ -254,6 +296,7 @@ export const completeOnboarding = mutation({
       projectId,
     })
 
-    return { projectId }
+    const latest = await ctx.db.get(projectId)
+    return { projectId, projectRef: latest ? projectRefFor(latest) : projectRefFor(project) }
   },
 })

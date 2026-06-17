@@ -6,6 +6,7 @@ import { useQuery } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import { Button } from "@/components/ui/button"
 import { UpgradeDialog } from "@/components/upgrade-dialog"
+import { useProjectRefFromPath } from "@/hooks/use-project-ref-from-path"
 
 function daysRemaining(trialEndsAt: number | null) {
   if (trialEndsAt === null) return 0
@@ -13,7 +14,8 @@ function daysRemaining(trialEndsAt: number | null) {
 }
 
 export function TrialCard() {
-  const billing = useQuery(api.billing.getProjectBillingStatus)
+  const projectRef = useProjectRefFromPath()
+  const billing = useQuery(api.billing.getProjectBillingStatus, projectRef ? { projectRef } : "skip")
   const [open, setOpen] = useState(false)
 
   if (!billing || billing.planStatus !== "trialing") return null
@@ -34,7 +36,7 @@ export function TrialCard() {
       <UpgradeDialog
         open={open}
         onOpenChange={setOpen}
-        projectId={billing.projectId}
+        projectRef={billing.projectRef}
       />
     </div>
   )

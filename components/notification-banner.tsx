@@ -5,6 +5,7 @@ import { useQuery } from "convex/react"
 import { AlertTriangle, Info, X } from "lucide-react"
 
 import { api } from "@/convex/_generated/api"
+import { useProjectRefFromPath } from "@/hooks/use-project-ref-from-path"
 import { cn } from "@/lib/utils"
 
 const dismissalKey = "astreex-dismissed-notifications"
@@ -47,7 +48,8 @@ function bannerClasses(severity: BannerSeverity) {
 }
 
 export function NotificationBanner() {
-  const notifications = useQuery(api.notifications.getActiveBanners)
+  const projectRef = useProjectRefFromPath()
+  const notifications = useQuery(api.notifications.getActiveBanners, projectRef ? { projectRef } : "skip")
   const [dismissals, setDismissals] = useState<Dismissals>(() => readDismissals())
   const [now, setNow] = useState(() => Date.now())
 

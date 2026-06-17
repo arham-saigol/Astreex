@@ -126,7 +126,7 @@ describe("onboarding pipeline helpers", () => {
     expect(brand?.scrapeStatus).toBe("complete")
   })
 
-  test("completeOnboarding enforces competitor URL plan limits", async () => {
+  test("prepareOnboardingProject enforces competitor URL plan limits", async () => {
     const t = convexTest(schema, modules)
     const authed = t.withIdentity({
       tokenIdentifier: "test|user_1",
@@ -134,7 +134,7 @@ describe("onboarding pipeline helpers", () => {
     })
 
     await expect(
-      authed.mutation(api.onboarding.completeOnboarding, {
+      authed.mutation(api.onboarding.prepareOnboardingProject, {
         projectName: "Astreex",
         websiteUrl: "https://astreex.example",
         competitorUrls: [
@@ -175,13 +175,13 @@ describe("onboarding pipeline helpers", () => {
     })
   })
 
-  test("completeOnboarding rejects duplicate competitor URLs", async () => {
+  test("prepareOnboardingProject rejects duplicate competitor URLs", async () => {
     const t = convexTest(schema, modules)
     await expect(
       t.withIdentity({
         tokenIdentifier: "test|user_1",
         email: "founder@example.com",
-      }).mutation(api.onboarding.completeOnboarding, {
+      }).mutation(api.onboarding.prepareOnboardingProject, {
         projectName: "Astreex",
         websiteUrl: "https://astreex.example",
         competitorUrls: ["https://a.example", "https://a.example/"],
@@ -252,6 +252,8 @@ describe("onboarding pipeline helpers", () => {
       })
       await ctx.db.insert("projects", {
         userId,
+        publicId: "p_tokenstatus",
+        slug: "astreex",
         name: "Astreex",
         plan: "growth",
         planStatus: "active",
@@ -271,15 +273,20 @@ describe("onboarding pipeline helpers", () => {
 
   test("completeOnboarding rejects zero active Reddit accounts", async () => {
     const t = convexTest(schema, modules)
+    const authed = t.withIdentity({
+      tokenIdentifier: "test|user_1",
+      email: "founder@example.com",
+    })
+    const draft = await authed.mutation(api.onboarding.prepareOnboardingProject, {
+      projectName: "Astreex",
+      websiteUrl: "https://astreex.example",
+      plan: "growth",
+      timezone: "America/New_York",
+    })
+
     await expect(
-      t.withIdentity({
-        tokenIdentifier: "test|user_1",
-        email: "founder@example.com",
-      }).mutation(api.onboarding.completeOnboarding, {
-        projectName: "Astreex",
-        websiteUrl: "https://astreex.example",
-        plan: "growth",
-        timezone: "America/New_York",
+      authed.mutation(api.onboarding.completeOnboarding, {
+        projectRef: draft.projectRef,
       }),
     ).rejects.toThrow("Connect at least one Reddit account to continue")
   })
@@ -333,10 +340,7 @@ describe("onboarding pipeline helpers", () => {
     })
 
     const result = await authed.mutation(api.onboarding.completeOnboarding, {
-      projectName: "Astreex",
-      websiteUrl: "https://astreex.example",
-      plan: "growth",
-      timezone: "America/New_York",
+      projectRef: draft.projectRef,
     })
 
     const state = await t.run(async (ctx) => ({
@@ -348,7 +352,7 @@ describe("onboarding pipeline helpers", () => {
     expect(state.scheduled).toHaveLength(1)
   })
 
-  test("completeOnboarding validates URL protocol and length", async () => {
+  test("prepareOnboardingProject validates URL protocol and length", async () => {
     const t = convexTest(schema, modules)
     const authed = t.withIdentity({
       tokenIdentifier: "test|user_1",
@@ -356,7 +360,7 @@ describe("onboarding pipeline helpers", () => {
     })
 
     await expect(
-      authed.mutation(api.onboarding.completeOnboarding, {
+      authed.mutation(api.onboarding.prepareOnboardingProject, {
         projectName: "Astreex",
         websiteUrl: "ftp://astreex.example",
         plan: "growth",
@@ -365,7 +369,7 @@ describe("onboarding pipeline helpers", () => {
     ).rejects.toThrow("Website URL must start with http:// or https://")
 
     await expect(
-      authed.mutation(api.onboarding.completeOnboarding, {
+      authed.mutation(api.onboarding.prepareOnboardingProject, {
         projectName: "A".repeat(101),
         websiteUrl: "https://astreex.example",
         plan: "growth",
