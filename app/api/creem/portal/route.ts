@@ -1,7 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server"
 
 import { api } from "@/convex/_generated/api"
-import type { Id } from "@/convex/_generated/dataModel"
 import { createCreemClient } from "@/lib/creemClient"
 import { getAuthedConvexClient } from "../../convex-client"
 
@@ -15,8 +14,8 @@ export async function POST(request: NextRequest) {
     return new NextResponse("Invalid JSON", { status: 400 })
   }
 
-  const { projectId } = body as { projectId?: unknown }
-  if (typeof projectId !== "string") {
+  const { projectRef } = body as { projectRef?: unknown }
+  if (typeof projectRef !== "string") {
     return new NextResponse("Invalid portal request", { status: 400 })
   }
 
@@ -25,7 +24,7 @@ export async function POST(request: NextRequest) {
 
   try {
     const project = await client.query(api.billing.getPortalProject, {
-      projectId: projectId as Id<"projects">,
+      projectRef,
     })
     const creem = createCreemClient()
     const links = await creem.customers.generateBillingLinks({

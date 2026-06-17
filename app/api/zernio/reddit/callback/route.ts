@@ -1,7 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server"
 
 import { api } from "@/convex/_generated/api"
-import type { Id } from "@/convex/_generated/dataModel"
 import { getAuthedConvexClient } from "../../../convex-client"
 import { rateLimitZernioOAuth } from "../rateLimiter"
 import {
@@ -34,7 +33,7 @@ export async function GET(request: NextRequest) {
   const rateLimited = await rateLimitZernioOAuth(request)
   if (rateLimited) return rateLimited
 
-  const cookieProjectId = request.cookies.get(zernioCookieNames.projectId)?.value
+  const cookieProjectRef = request.cookies.get(zernioCookieNames.projectId)?.value
   const cookieProfileId = request.cookies.get(zernioCookieNames.profileId)?.value
   const cookieState = request.cookies.get(zernioCookieNames.state)?.value
   const returnTo = safeReturnTo(
@@ -50,12 +49,11 @@ export async function GET(request: NextRequest) {
     return badRequest(request, returnTo, error)
   }
 
-  if (!cookieProjectId || !cookieProfileId || !cookieState) {
+  if (!cookieProjectRef || !cookieProfileId || !cookieState) {
     return badRequest(request, returnTo, "Missing Zernio connection context")
   }
 
   if (
-    !isSyntacticallyValidProjectId(cookieProjectId) ||
     connected !== "reddit" ||
     profileId !== cookieProfileId ||
     state !== cookieState ||
@@ -64,8 +62,6 @@ export async function GET(request: NextRequest) {
   ) {
     return badRequest(request, returnTo, "Invalid Zernio callback")
   }
-  const projectId = cookieProjectId as Id<"projects">
-
   const { client, response: authResponse } = await getAuthedConvexClient(request)
   if (!client) {
     clearZernioCookies(authResponse)
@@ -73,6 +69,10 @@ export async function GET(request: NextRequest) {
   }
 
   try {
+    const resolved = await client.query(api.projects.getProjectByRefForServer, {
+      projectRef: cookieProjectRef,
+    })
+    const projectId = resolved.projectId
     const context = await client.query(api.reddit.getConnectContext, {
       projectId,
     })
@@ -115,6 +115,3 @@ function isSyntacticallyValidZernioId(value: string) {
   return /^[A-Za-z0-9_-]{3,128}$/.test(value)
 }
 
-function isSyntacticallyValidProjectId(value: string) {
-  return /^[A-Za-z0-9]{16,64}$/.test(value)
-}

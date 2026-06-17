@@ -1,6 +1,7 @@
 "use client"
 
 import { useMemo, useState } from "react"
+import { usePathname } from "next/navigation"
 import { useQuery } from "convex/react"
 import { AlertTriangle, Info, X } from "lucide-react"
 
@@ -46,8 +47,14 @@ function bannerClasses(severity: BannerSeverity) {
   return "border-accent/30 bg-accent-subtle text-accent"
 }
 
+function useProjectRefFromPath() {
+  const pathname = usePathname()
+  return pathname.match(/^\/projects\/([^/]+)/)?.[1] ?? null
+}
+
 export function NotificationBanner() {
-  const notifications = useQuery(api.notifications.getActiveBanners)
+  const projectRef = useProjectRefFromPath()
+  const notifications = useQuery(api.notifications.getActiveBanners, projectRef ? { projectRef } : "skip")
   const [dismissals, setDismissals] = useState<Dismissals>(() => readDismissals())
   const [now, setNow] = useState(() => Date.now())
 

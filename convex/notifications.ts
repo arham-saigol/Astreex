@@ -1,6 +1,6 @@
 import { v } from "convex/values"
-import { api } from "./_generated/api"
 import { query } from "./_generated/server"
+import { requireProjectAccessByRef } from "./lib/projectRefs"
 
 const severity = v.union(
   v.literal("info"),
@@ -15,7 +15,7 @@ type BannerNotification = {
 }
 
 export const getActiveBanners = query({
-  args: {},
+  args: { projectRef: v.string() },
   returns: v.array(
     v.object({
       id: v.string(),
@@ -23,9 +23,11 @@ export const getActiveBanners = query({
       message: v.string(),
     }),
   ),
-  handler: async (ctx): Promise<BannerNotification[]> => {
-    const billing = await ctx.runQuery(api.billing.getProjectBillingStatus, {})
-    if (!billing) return []
+  handler: async (ctx, args): Promise<BannerNotification[]> => {
+    const { project } = await requireProjectAccessByRef(ctx, args.projectRef)
+    const billing = {
+      planStatus: project.planStatus,
+    }
 
     const notifications: BannerNotification[] = []
 
@@ -39,7 +41,7 @@ export const getActiveBanners = query({
 
     const accounts = await ctx.db
       .query("redditAccounts")
-      .withIndex("by_projectId", (q) => q.eq("projectId", billing.projectId))
+      .withIndex("by_projectId", (q) => q.eq("projectId", project._id))
       .take(50)
 
     const hasBannedAccount = accounts.some(

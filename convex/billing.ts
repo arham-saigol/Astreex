@@ -7,7 +7,7 @@ import {
   type QueryCtx,
 } from "./_generated/server"
 import type { Doc, Id } from "./_generated/dataModel"
-import { requireAuthenticatedUser, requireOwnedProject } from "./lib/auth"
+import { projectRefFor, requireProjectAccessByRef, requireProjectOwnerByRef } from "./lib/projectRefs"
 import { getPlanLimits } from "./lib/planLimits"
 import { reconcileProjectIntelligenceUrls } from "./lib/projectIntelligenceReconciliation"
 
@@ -25,25 +25,6 @@ const billingStatusValidator = v.union(
 
 type Plan = "starter" | "growth" | "scale"
 type BillingInterval = "monthly" | "annual"
-
-async function getCurrentUser(ctx: QueryCtx | MutationCtx) {
-  return await requireAuthenticatedUser(ctx)
-}
-
-async function getCurrentProject(ctx: QueryCtx) {
-  const user = await getCurrentUser(ctx)
-  return await ctx.db
-    .query("projects")
-    .withIndex("by_userId", (q) => q.eq("userId", user._id))
-    .first()
-}
-
-async function getOwnedProject(
-  ctx: QueryCtx | MutationCtx,
-  projectId: Id<"projects">,
-) {
-  return await requireOwnedProject(ctx, projectId)
-}
 
 async function projectUsage(ctx: QueryCtx | MutationCtx, projectId: Id<"projects">) {
   const subreddits = await ctx.db
@@ -188,16 +169,16 @@ async function findWebhookProject(
 }
 
 export const getProjectBillingStatus = query({
-  args: {},
-  handler: async (ctx) => {
-    const project = await getCurrentProject(ctx)
-    if (!project) return null
+  args: { projectRef: v.string() },
+  handler: async (ctx, args) => {
+    const { project, membership } = await requireProjectAccessByRef(ctx, args.projectRef)
 
     const limits = getPlanLimits(project.plan)
     const usage = await projectUsage(ctx, project._id)
 
     return {
-      projectId: project._id,
+      projectRef: projectRefFor(project),
+      role: membership.role,
       plan: project.plan,
       planStatus: project.planStatus,
       billingInterval: project.billingInterval ?? null,
@@ -221,10 +202,10 @@ export const getProjectBillingStatus = query({
 
 export const getCheckoutProject = query({
   args: {
-    projectId: v.id("projects"),
+    projectRef: v.string(),
   },
   handler: async (ctx, args) => {
-    const project = await getOwnedProject(ctx, args.projectId)
+    const { project } = await requireProjectOwnerByRef(ctx, args.projectRef)
 
     return {
       projectId: project._id,
@@ -238,10 +219,10 @@ export const getCheckoutProject = query({
 
 export const getPortalProject = query({
   args: {
-    projectId: v.id("projects"),
+    projectRef: v.string(),
   },
   handler: async (ctx, args) => {
-    const project = await getOwnedProject(ctx, args.projectId)
+    const { project } = await requireProjectOwnerByRef(ctx, args.projectRef)
     if (!project.creemCustomerId) {
       throw new Error("No Creem customer exists for this project")
     }

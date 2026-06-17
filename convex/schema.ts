@@ -8,6 +8,7 @@ const planStatus = v.union(
   v.literal("canceled"),
   v.literal("past_due"),
   v.literal("trial_expired"),
+  v.literal("requires_subscription"),
 )
 const billingInterval = v.union(v.literal("monthly"), v.literal("annual"))
 const onboardingStatus = v.union(
@@ -68,11 +69,15 @@ export default defineSchema({
     email: v.string(),
     name: v.optional(v.string()),
     avatarUrl: v.optional(v.string()),
+    firstCreatedProjectId: v.optional(v.id("projects")),
+    initialProjectOnboardingSkippedAt: v.optional(v.number()),
     createdAt: v.number(),
   }).index("by_tokenIdentifier", ["tokenIdentifier"]),
 
   projects: defineTable({
     userId: v.id("users"),
+    publicId: v.optional(v.string()),
+    slug: v.optional(v.string()),
     name: v.string(),
     plan,
     planStatus,
@@ -91,10 +96,42 @@ export default defineSchema({
     createdAt: v.number(),
   })
     .index("by_userId", ["userId"])
+    .index("by_publicId", ["publicId"])
     .index("by_lastActiveAt", ["lastActiveAt"])
     .index("by_planStatus", ["planStatus"])
     .index("by_creemCustomerId", ["creemCustomerId"])
     .index("by_creemSubscriptionId", ["creemSubscriptionId"]),
+
+  projectMemberships: defineTable({
+    projectId: v.id("projects"),
+    userId: v.id("users"),
+    role: v.union(v.literal("owner"), v.literal("member")),
+    createdAt: v.number(),
+  })
+    .index("by_userId", ["userId"])
+    .index("by_projectId", ["projectId"])
+    .index("by_projectId_and_userId", ["projectId", "userId"]),
+
+  projectInvitations: defineTable({
+    projectId: v.id("projects"),
+    email: v.string(),
+    invitedByUserId: v.id("users"),
+    tokenHash: v.string(),
+    status: v.union(
+      v.literal("pending"),
+      v.literal("accepted"),
+      v.literal("revoked"),
+      v.literal("expired"),
+    ),
+    expiresAt: v.number(),
+    acceptedByUserId: v.optional(v.id("users")),
+    acceptedAt: v.optional(v.number()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_projectId", ["projectId"])
+    .index("by_projectId_and_email", ["projectId", "email"])
+    .index("by_tokenHash", ["tokenHash"]),
 
   projectIntelligenceProfiles: defineTable({
     projectId: v.id("projects"),

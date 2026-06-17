@@ -22,16 +22,20 @@ export interface OnboardingData {
   redditAccounts: { username: string; isActive: boolean }[]
   timezone: string
   projectId: Id<"projects"> | null
+  projectRef: string | null
 }
 
 const TOTAL_STEPS = 4
 
 export default function OnboardingPage() {
   const router = useRouter()
+  const isNewProject =
+    typeof window !== "undefined" && new URLSearchParams(window.location.search).get("new") === "1"
   const status = useQuery(api.onboarding.getOnboardingStatus)
   const draft = useQuery(api.onboarding.getOnboardingDraft)
   const prepareOnboardingProject = useMutation(api.onboarding.prepareOnboardingProject)
   const completeOnboarding = useMutation(api.onboarding.completeOnboarding)
+  const skipInitialProjectOnboarding = useMutation(api.projects.skipInitialProjectOnboarding)
 
   const [step, setStep] = useState(1)
   const [direction, setDirection] = useState(1)
@@ -48,14 +52,15 @@ export default function OnboardingPage() {
     redditAccounts: [],
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     projectId: null,
+    projectRef: null,
   })
 
-  // Redirect if already onboarded
+  // Redirect only if normal onboarding is complete. /onboarding?new=1 always creates a project.
   useEffect(() => {
-    if (status?.hasCompletedOnboarding) {
+    if (!isNewProject && status?.hasProjects) {
       router.replace("/dashboard")
     }
-  }, [status, router])
+  }, [isNewProject, status, router])
 
   useEffect(() => {
     const searchParams = new URLSearchParams(window.location.search)
@@ -75,6 +80,7 @@ export default function OnboardingPage() {
       setData((prev) => ({
         ...prev,
         projectId: draft.projectId,
+        projectRef: draft.projectRef,
         projectName: draft.projectName,
         websiteUrl: draft.websiteUrl,
         competitorUrls: draft.competitorUrls,
@@ -106,10 +112,11 @@ export default function OnboardingPage() {
       competitorUrls: data.competitorUrls,
       plan: data.plan,
       timezone: data.timezone,
+      newProject: isNewProject,
     })
-    updateData({ projectId: result.projectId })
-    return result.projectId
-  }, [data, prepareOnboardingProject, updateData])
+    updateData({ projectId: result.projectId, projectRef: result.projectRef })
+    return result
+  }, [data, isNewProject, prepareOnboardingProject, updateData])
 
   const handlePlanNext = useCallback(async () => {
     setIsPreparingProject(true)
@@ -126,10 +133,11 @@ export default function OnboardingPage() {
   }, [ensureDraftProject, goNext])
 
   const handleConnectReddit = useCallback(async () => {
-    let projectId = data.projectId
-    if (!projectId) {
+    let projectRef = data.projectRef
+    if (!data.projectId || !projectRef) {
       try {
-        projectId = await ensureDraftProject()
+        const result = await ensureDraftProject()
+        projectRef = result.projectRef
       } catch (error) {
         console.error("Project setup failed:", error)
         const message = error instanceof Error ? error.message : "Project setup failed."
@@ -138,11 +146,11 @@ export default function OnboardingPage() {
         return
       }
     }
-    if (!projectId) return
+    if (!projectRef) return
     window.location.assign(
-      `/api/zernio/reddit/connect?projectId=${encodeURIComponent(projectId)}&returnTo=onboarding`,
+      `/api/zernio/reddit/connect?projectRef=${encodeURIComponent(projectRef)}&returnTo=onboarding`,
     )
-  }, [data.projectId, ensureDraftProject])
+  }, [data.projectId, data.projectRef, ensureDraftProject])
 
   const handleComplete = useCallback(async () => {
     setIsSubmitting(true)
@@ -154,6 +162,7 @@ export default function OnboardingPage() {
         competitorUrls: data.competitorUrls,
         plan: data.plan,
         timezone: data.timezone,
+        newProject: isNewProject,
       })
       router.replace("/dashboard")
     } catch (error) {
@@ -162,10 +171,10 @@ export default function OnboardingPage() {
     } finally {
       setIsSubmitting(false)
     }
-  }, [completeOnboarding, data, router])
+  }, [completeOnboarding, data, isNewProject, router])
 
   // Show nothing while checking status
-  if (status === undefined || status?.hasCompletedOnboarding) {
+  if (status === undefined || (!isNewProject && status?.hasProjects)) {
     return null
   }
 
@@ -210,6 +219,11 @@ export default function OnboardingPage() {
                 data={data}
                 updateData={updateData}
                 onNext={goNext}
+                showSkip={!isNewProject && status?.hasCreatedProjects === false}
+                onSkip={async () => {
+                  await skipInitialProjectOnboarding()
+                  router.replace("/dashboard")
+                }}
               />
             )}
             {step === 2 && (

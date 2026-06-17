@@ -3,6 +3,7 @@
 import { useState } from "react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
+import { useQuery } from "convex/react"
 import { useClerk, useUser } from "@clerk/nextjs"
 import { AnimatePresence, motion } from "framer-motion"
 import {
@@ -18,15 +19,16 @@ import {
 } from "lucide-react"
 import { useTheme } from "next-themes"
 
+import { api } from "@/convex/_generated/api"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { TrialCard } from "@/components/trial-card"
 import { cn } from "@/lib/utils"
 
 const navItems = [
-  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/feed", label: "Feed", icon: Layers },
-  { href: "/radar", label: "Radar", icon: Radio },
+  { segment: "dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { segment: "feed", label: "Feed", icon: Layers },
+  { segment: "radar", label: "Radar", icon: Radio },
 ]
 
 function NavItem({
@@ -59,7 +61,7 @@ function NavItem({
   )
 }
 
-function ProfileMenu() {
+function ProfileMenu({ settingsHref }: { settingsHref: string }) {
   const { user } = useUser()
   const { signOut } = useClerk()
   const { resolvedTheme, setTheme } = useTheme()
@@ -88,7 +90,7 @@ function ProfileMenu() {
       </PopoverTrigger>
       <PopoverContent side="top" sideOffset={8} align="start" className="w-56">
         <Link
-          href="/settings"
+          href={settingsHref}
           className="flex items-center gap-3 rounded-md px-3 py-2 text-[14px] text-text-secondary transition-colors duration-150 hover:bg-muted hover:text-text-primary"
         >
           <Settings className="size-4" strokeWidth={1.5} />
@@ -120,6 +122,10 @@ function ProfileMenu() {
 
 function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
   const pathname = usePathname()
+  const data = useQuery(api.projects.listAccessibleProjects)
+  const projectRef = pathname.match(/^\/projects\/([^/]+)/)?.[1] ?? null
+  const currentProject = data?.projects.find((project) => project.projectRef === projectRef)
+  const projectBase = projectRef ? `/projects/${projectRef}` : null
 
   return (
     <div className="flex h-full flex-col">
@@ -133,21 +139,56 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
       </div>
 
       {/* Navigation */}
+      <div className="px-2">
+        <Popover>
+          <PopoverTrigger className="flex w-full items-center justify-between rounded-lg border border-border bg-surface px-3 py-2 text-left text-[14px] font-medium text-text-primary">
+            <span className="truncate">{currentProject?.name ?? "All projects"}</span>
+          </PopoverTrigger>
+          <PopoverContent align="start" className="w-56">
+            <Link href="/dashboard" onClick={onNavigate} className="block rounded-md px-3 py-2 text-[14px] text-text-secondary hover:bg-muted hover:text-text-primary">
+              All projects
+            </Link>
+            {(data?.projects ?? []).map((project) => (
+              <Link key={project.projectRef} href={`/projects/${project.projectRef}/dashboard`} onClick={onNavigate} className="block truncate rounded-md px-3 py-2 text-[14px] text-text-secondary hover:bg-muted hover:text-text-primary">
+                {project.name}
+              </Link>
+            ))}
+            <div className="my-1 h-px bg-border" />
+            <Link href="/onboarding?new=1" onClick={onNavigate} className="block rounded-md px-3 py-2 text-[14px] text-accent hover:bg-muted">
+              Create new project
+            </Link>
+          </PopoverContent>
+        </Popover>
+      </div>
+
       <nav className="mt-4 flex-1 space-y-1 px-2">
-        {navItems.map((item) => (
+        {projectBase ? navItems.map((item) => {
+          const href = `${projectBase}/${item.segment}`
+          return (
+            <NavItem
+              key={item.segment}
+              href={href}
+              label={item.label}
+              icon={item.icon}
+              active={pathname.startsWith(href)}
+              onClick={onNavigate}
+            />
+          )
+        }) : (
           <NavItem
-            key={item.href}
-            {...item}
-            active={pathname.startsWith(item.href)}
+            href="/dashboard"
+            label="Projects"
+            icon={LayoutDashboard}
+            active={pathname === "/dashboard"}
             onClick={onNavigate}
           />
-        ))}
+        )}
       </nav>
 
       {/* Profile */}
       <div className="space-y-3 border-t border-border px-2 py-3">
         <TrialCard />
-        <ProfileMenu />
+        <ProfileMenu settingsHref={projectRef ? `/projects/${projectRef}/settings` : "/dashboard"} />
       </div>
     </div>
   )

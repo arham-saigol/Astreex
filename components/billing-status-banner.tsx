@@ -1,14 +1,21 @@
 "use client"
 
 import { useState } from "react"
+import { usePathname } from "next/navigation"
 import { useQuery } from "convex/react"
 import { toast } from "sonner"
 
 import { api } from "@/convex/_generated/api"
 import { Button } from "@/components/ui/button"
 
+function useProjectRefFromPath() {
+  const pathname = usePathname()
+  return pathname.match(/^\/projects\/([^/]+)/)?.[1] ?? null
+}
+
 export function BillingStatusBanner() {
-  const billing = useQuery(api.billing.getProjectBillingStatus)
+  const projectRef = useProjectRefFromPath()
+  const billing = useQuery(api.billing.getProjectBillingStatus, projectRef ? { projectRef } : "skip")
   const [loading, setLoading] = useState(false)
 
   if (!billing || billing.planStatus !== "past_due") return null
@@ -19,7 +26,7 @@ export function BillingStatusBanner() {
       const response = await fetch("/api/creem/portal", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ projectId: billing.projectId }),
+        body: JSON.stringify({ projectRef: billing.projectRef }),
       })
 
       if (!response.ok) throw new Error(await response.text())

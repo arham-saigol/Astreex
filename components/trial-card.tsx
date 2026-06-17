@@ -1,6 +1,7 @@
 "use client"
 
 import { useState } from "react"
+import { usePathname } from "next/navigation"
 import { useQuery } from "convex/react"
 
 import { api } from "@/convex/_generated/api"
@@ -12,8 +13,14 @@ function daysRemaining(trialEndsAt: number | null) {
   return Math.max(0, Math.ceil((trialEndsAt - Date.now()) / 86_400_000))
 }
 
+function useProjectRefFromPath() {
+  const pathname = usePathname()
+  return pathname.match(/^\/projects\/([^/]+)/)?.[1] ?? null
+}
+
 export function TrialCard() {
-  const billing = useQuery(api.billing.getProjectBillingStatus)
+  const projectRef = useProjectRefFromPath()
+  const billing = useQuery(api.billing.getProjectBillingStatus, projectRef ? { projectRef } : "skip")
   const [open, setOpen] = useState(false)
 
   if (!billing || billing.planStatus !== "trialing") return null
@@ -34,7 +41,7 @@ export function TrialCard() {
       <UpgradeDialog
         open={open}
         onOpenChange={setOpen}
-        projectId={billing.projectId}
+        projectRef={billing.projectRef}
       />
     </div>
   )

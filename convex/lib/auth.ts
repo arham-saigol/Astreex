@@ -51,12 +51,41 @@ export async function getCurrentProjectOrNull(ctx: AuthDbCtx) {
   const user = await getCurrentUserOrNull(ctx)
   if (!user) return null
 
+  const membership = await ctx.db
+    .query("projectMemberships")
+    .withIndex("by_userId", (q) => q.eq("userId", user._id))
+    .first()
+  const membershipProject = membership ? await ctx.db.get(membership.projectId) : null
+  if (membershipProject) return { user, project: membershipProject }
+
   const project = await ctx.db
     .query("projects")
     .withIndex("by_userId", (q) => q.eq("userId", user._id))
     .first()
 
   return project ? { user, project } : null
+}
+
+export async function requireProjectAccess(
+  ctx: AuthDbCtx,
+  projectId: Id<"projects">,
+): Promise<Doc<"projects">> {
+  const user = await requireAuthenticatedUser(ctx)
+  const project = await ctx.db.get(projectId)
+  if (!project) throw new Error("Not authorized")
+
+  const membership = await ctx.db
+    .query("projectMemberships")
+    .withIndex("by_projectId_and_userId", (q) =>
+      q.eq("projectId", projectId).eq("userId", user._id),
+    )
+    .unique()
+
+  if (!membership && project.userId !== user._id) {
+    throw new Error("Not authorized")
+  }
+
+  return project
 }
 
 export async function requireOwnedProject(
@@ -66,7 +95,16 @@ export async function requireOwnedProject(
   const user = await requireAuthenticatedUser(ctx)
   const project = await ctx.db.get(projectId)
 
-  if (!project || project.userId !== user._id) {
+  if (!project) throw new Error("Not authorized")
+
+  const membership = await ctx.db
+    .query("projectMemberships")
+    .withIndex("by_projectId_and_userId", (q) =>
+      q.eq("projectId", projectId).eq("userId", user._id),
+    )
+    .unique()
+
+  if (membership?.role !== "owner" && project.userId !== user._id) {
     throw new Error("Not authorized")
   }
 

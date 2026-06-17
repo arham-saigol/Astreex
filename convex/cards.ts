@@ -2,7 +2,8 @@ import { v } from "convex/values"
 import { internal } from "./_generated/api"
 import type { Id } from "./_generated/dataModel"
 import { internalMutation, mutation, query, type MutationCtx } from "./_generated/server"
-import { getCurrentUserOrNull, requireAuthenticatedUser } from "./lib/auth"
+import { requireProjectAccess } from "./lib/auth"
+import { requireProjectAccessByRef } from "./lib/projectRefs"
 
 const FIVE_MINUTES_MS = 5 * 60 * 1000
 
@@ -75,16 +76,9 @@ async function findScheduledSpacingConflicts(
 }
 
 export const getActiveCards = query({
-  args: {},
-  handler: async (ctx) => {
-    const user = await getCurrentUserOrNull(ctx)
-    if (!user) return []
-
-    const project = await ctx.db
-      .query("projects")
-      .withIndex("by_userId", (q) => q.eq("userId", user._id))
-      .first()
-    if (!project) return []
+  args: { projectRef: v.string() },
+  handler: async (ctx, args) => {
+    const { project } = await requireProjectAccessByRef(ctx, args.projectRef)
 
     const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000
 
@@ -137,16 +131,9 @@ export const getActiveCards = query({
 })
 
 export const getFeedStatus = query({
-  args: {},
-  handler: async (ctx) => {
-    const user = await getCurrentUserOrNull(ctx)
-    if (!user) return null
-
-    const project = await ctx.db
-      .query("projects")
-      .withIndex("by_userId", (q) => q.eq("userId", user._id))
-      .first()
-    if (!project) return null
+  args: { projectRef: v.string() },
+  handler: async (ctx, args) => {
+    const { project } = await requireProjectAccessByRef(ctx, args.projectRef)
 
     const today = localDateParts(project.timezone, new Date())
     const localDate = `${today.year}-${String(today.month).padStart(2, "0")}-${String(today.day).padStart(2, "0")}`
@@ -169,15 +156,10 @@ export const approveCard = mutation({
     editedContent: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const user = await requireAuthenticatedUser(ctx)
-
     const card = await ctx.db.get(args.cardId)
     if (!card) throw new Error("Card not found")
 
-    const project = await ctx.db.get(card.projectId)
-    if (!project || project.userId !== user._id) {
-      throw new Error("Not authorized")
-    }
+    const project = await requireProjectAccess(ctx, card.projectId)
 
     if (card.status !== "pending") {
       throw new Error("Only pending cards can be approved")
@@ -240,15 +222,10 @@ export const declineCard = mutation({
     cardId: v.id("cards"),
   },
   handler: async (ctx, args) => {
-    const user = await requireAuthenticatedUser(ctx)
-
     const card = await ctx.db.get(args.cardId)
     if (!card) throw new Error("Card not found")
 
-    const project = await ctx.db.get(card.projectId)
-    if (!project || project.userId !== user._id) {
-      throw new Error("Not authorized")
-    }
+    await requireProjectAccess(ctx, card.projectId)
 
     if (card.status !== "pending") {
       throw new Error("Only pending cards can be declined")

@@ -2,7 +2,6 @@ import { currentUser } from "@clerk/nextjs/server"
 import { NextResponse, type NextRequest } from "next/server"
 
 import { api } from "@/convex/_generated/api"
-import type { Id } from "@/convex/_generated/dataModel"
 import { createCreemClient } from "@/lib/creemClient"
 import {
   getCreemProductId,
@@ -32,13 +31,13 @@ export async function POST(request: NextRequest) {
     return new NextResponse("Invalid JSON", { status: 400 })
   }
 
-  const { projectId, plan, interval } = body as {
-    projectId?: unknown
+  const { projectRef, plan, interval } = body as {
+    projectRef?: unknown
     plan?: unknown
     interval?: unknown
   }
 
-  if (typeof projectId !== "string" || !isPlan(plan) || !isInterval(interval)) {
+  if (typeof projectRef !== "string" || !isPlan(plan) || !isInterval(interval)) {
     return new NextResponse("Invalid checkout request", { status: 400 })
   }
 
@@ -50,11 +49,11 @@ export async function POST(request: NextRequest) {
 
   try {
     const project = await client.query(api.billing.getCheckoutProject, {
-      projectId: projectId as Id<"projects">,
+      projectRef,
     })
     const productId = getCreemProductId(plan, interval)
     const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? request.nextUrl.origin
-    const successUrl = new URL("/settings?tab=billing&checkout=success", appUrl)
+    const successUrl = new URL(`/projects/${encodeURIComponent(projectRef)}/settings?tab=billing&checkout=success`, appUrl)
     const creem = createCreemClient()
     const checkout = await creem.checkouts.create({
       productId,

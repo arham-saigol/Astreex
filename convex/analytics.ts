@@ -9,7 +9,8 @@ import {
 } from "./_generated/server"
 import { internal } from "./_generated/api"
 import type { Doc, Id } from "./_generated/dataModel"
-import { requireAuthenticatedUser, requireOwnedProject } from "./lib/auth"
+import { requireProjectAccess } from "./lib/auth"
+import { projectRefFor, requireProjectAccessByRef } from "./lib/projectRefs"
 
 const timeframeValidator = v.union(
   v.literal("7d"),
@@ -22,15 +23,11 @@ const DAY = 24 * HOUR
 
 type Timeframe = "7d" | "30d" | "all"
 
-async function getCurrentUser(ctx: QueryCtx | MutationCtx) {
-  return await requireAuthenticatedUser(ctx)
-}
-
-async function getOwnedProject(
+async function getAccessibleProject(
   ctx: QueryCtx | MutationCtx,
   projectId: Id<"projects">,
 ) {
-  return await requireOwnedProject(ctx, projectId)
+  return await requireProjectAccess(ctx, projectId)
 }
 
 function cutoffForTimeframe(timeframe: Timeframe) {
@@ -85,19 +82,15 @@ async function getPostedContent(
 }
 
 export const getDashboardContext = query({
-  args: {},
-  handler: async (ctx) => {
-    const user = await getCurrentUser(ctx)
-    const project = await ctx.db
-      .query("projects")
-      .withIndex("by_userId", (q) => q.eq("userId", user._id))
-      .first()
-
-    if (!project) return null
+  args: { projectRef: v.string() },
+  handler: async (ctx, args) => {
+    const { project, membership } = await requireProjectAccessByRef(ctx, args.projectRef)
 
     return {
-      projectId: project._id,
+      projectRef: projectRefFor(project),
       plan: project.plan,
+      planStatus: project.planStatus,
+      role: membership.role,
       lastAnalyticsRefresh: project.lastAnalyticsRefresh ?? null,
     }
   },
@@ -105,24 +98,24 @@ export const getDashboardContext = query({
 
 export const getDashboardMetrics = query({
   args: {
-    projectId: v.id("projects"),
+    projectRef: v.string(),
     timeframe: timeframeValidator,
   },
   handler: async (ctx, args) => {
-    await getOwnedProject(ctx, args.projectId)
+    const { project } = await requireProjectAccessByRef(ctx, args.projectRef)
 
     const cutoff = cutoffForTimeframe(args.timeframe)
-    const postedContent = await getPostedContent(ctx, args.projectId, args.timeframe)
+    const postedContent = await getPostedContent(ctx, project._id, args.timeframe)
     const reviewedCards = await ctx.db
       .query("cards")
       .withIndex("by_projectId_and_createdAt", (q) =>
-        q.eq("projectId", args.projectId).gte("createdAt", cutoff),
+        q.eq("projectId", project._id).gte("createdAt", cutoff),
       )
       .order("desc")
       .take(500)
     const accounts = await ctx.db
       .query("redditAccounts")
-      .withIndex("by_projectId", (q) => q.eq("projectId", args.projectId))
+      .withIndex("by_projectId", (q) => q.eq("projectId", project._id))
       .take(50)
 
     const decidedCards = reviewedCards.filter(
@@ -155,12 +148,12 @@ export const getDashboardMetrics = query({
 
 export const getRecentActivity = query({
   args: {
-    projectId: v.id("projects"),
+    projectRef: v.string(),
     timeframe: timeframeValidator,
   },
   handler: async (ctx, args) => {
-    await getOwnedProject(ctx, args.projectId)
-    const postedContent = await getPostedContent(ctx, args.projectId, args.timeframe)
+    const { project } = await requireProjectAccessByRef(ctx, args.projectRef)
+    const postedContent = await getPostedContent(ctx, project._id, args.timeframe)
 
     return await Promise.all(
       postedContent.slice(0, 10).map(async (item) => {
@@ -184,12 +177,12 @@ export const getRecentActivity = query({
 
 export const getTrendData = query({
   args: {
-    projectId: v.id("projects"),
+    projectRef: v.string(),
     timeframe: timeframeValidator,
   },
   handler: async (ctx, args) => {
-    await getOwnedProject(ctx, args.projectId)
-    const postedContent = await getPostedContent(ctx, args.projectId, args.timeframe)
+    const { project } = await requireProjectAccessByRef(ctx, args.projectRef)
+    const postedContent = await getPostedContent(ctx, project._id, args.timeframe)
     const base = emptyTrendData(args.timeframe)
     if (postedContent.length === 0) return base
 
@@ -208,12 +201,12 @@ export const getTrendData = query({
 
 export const getBestPerforming = query({
   args: {
-    projectId: v.id("projects"),
+    projectRef: v.string(),
     timeframe: timeframeValidator,
   },
   handler: async (ctx, args) => {
-    await getOwnedProject(ctx, args.projectId)
-    const postedContent = await getPostedContent(ctx, args.projectId, args.timeframe)
+    const { project } = await requireProjectAccessByRef(ctx, args.projectRef)
+    const postedContent = await getPostedContent(ctx, project._id, args.timeframe)
     const best = [...postedContent].sort((a, b) => b.score - a.score).slice(0, 5)
 
     return await Promise.all(
@@ -236,7 +229,7 @@ export const getRefreshContext = internalQuery({
     projectId: v.id("projects"),
   },
   handler: async (ctx, args) => {
-    const project = await getOwnedProject(ctx, args.projectId)
+    const project = await getAccessibleProject(ctx, args.projectId)
 
     return {
       lastAnalyticsRefresh: project.lastAnalyticsRefresh ?? null,
@@ -250,7 +243,7 @@ export const markAnalyticsRefreshed = internalMutation({
     refreshedAt: v.number(),
   },
   handler: async (ctx, args) => {
-    await getOwnedProject(ctx, args.projectId)
+    await getAccessibleProject(ctx, args.projectId)
     await ctx.db.patch(args.projectId, {
       lastAnalyticsRefresh: args.refreshedAt,
     })
