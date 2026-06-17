@@ -145,6 +145,7 @@ async function seedSubredditAccess(
   subreddits: string[],
 ) {
   await t.run(async (ctx) => {
+    const checkedAt = Date.now()
     for (const redditAccountId of redditAccountIds) {
       for (const subreddit of subreddits) {
         await ctx.db.insert("redditSubredditAccess", {
@@ -152,7 +153,7 @@ async function seedSubredditAccess(
           redditAccountId,
           subreddit,
           canPost: true,
-          checkedAt: Date.now(),
+          checkedAt,
         })
       }
     }
@@ -264,6 +265,7 @@ describe("pipeline helpers", () => {
     expect(warmup.activityStatus).toBe("warmup")
     expect(warmup.activityIssues).toEqual(["low_karma", "new_account"])
     expect(unknown.activityStatus).toBe("warmup")
+    expect(unknown.activityIssues).toEqual(["karma_unknown", "account_age_unknown"])
   })
 
   test("Zernio account helpers preserve top-level account fields", () => {

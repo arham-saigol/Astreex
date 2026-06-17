@@ -93,7 +93,7 @@ async function eligibleAccountsForSubreddit(
   const readyAccounts = postableAccounts.filter(isReadyRedditAccount)
   const hasReadyAccount = usableAccounts.some(isReadyRedditAccount)
 
-  return hasReadyAccount ? readyAccounts : postableAccounts
+  return hasReadyAccount && readyAccounts.length > 0 ? readyAccounts : postableAccounts
 }
 
 export const createDailyCards = internalMutation({

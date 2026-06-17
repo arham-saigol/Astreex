@@ -352,9 +352,13 @@ export const addSubreddit = action({
       description: description?.slice(0, 1000),
       rulesJson: details.rules === undefined ? undefined : stringifyRulesJson(details.rules),
     })
-    await ctx.runAction(internal.reddit.refreshProjectSubredditAccess, {
-      projectId: context.projectId as never,
-    })
+    try {
+      await ctx.runAction(internal.reddit.refreshProjectSubredditAccess, {
+        projectId: context.projectId as never,
+      })
+    } catch {
+      console.warn("Subreddit access refresh failed after manual add")
+    }
     return result
   },
 })

@@ -517,7 +517,6 @@ export const loadProjectSafetySyncTargets = internalQuery({
 export const pageProjectsForSafetySync = internalQuery({
   args: {
     planStatus: v.union(v.literal("trialing"), v.literal("active")),
-    cursor: v.optional(v.id("projects")),
   },
   handler: async (ctx, args) => {
     const projects = await ctx.db
@@ -726,9 +725,9 @@ export const refreshAllRedditSafety = internalAction({
           internal.reddit.loadProjectSafetySyncTargets,
           { projectId },
         )
-        for (const accountId of accountIds) {
-          await refreshAccountSafetyData(ctx, accountId)
-        }
+        await Promise.all(accountIds.map((accountId) =>
+          refreshAccountSafetyData(ctx, accountId),
+        ))
       }
     }
     return null

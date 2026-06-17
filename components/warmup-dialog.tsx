@@ -11,6 +11,24 @@ function ageDays(createdAt: number | null) {
   return `${days} day${days === 1 ? "" : "s"} old`
 }
 
+function hasStoredAcknowledgement(key: string) {
+  if (typeof window === "undefined") return false
+  try {
+    return window.localStorage.getItem(key) === "1"
+  } catch {
+    return false
+  }
+}
+
+function storeAcknowledgement(key: string) {
+  if (typeof window === "undefined") return
+  try {
+    window.localStorage.setItem(key, "1")
+  } catch {
+    // Ignore storage failures; in-memory acknowledgement still dismisses the dialog.
+  }
+}
+
 export function WarmupDialog() {
   const status = useQuery(api.reddit.getWarmupStatus)
   const [acknowledgedKey, setAcknowledgedKey] = useState<string | null>(null)
@@ -24,8 +42,7 @@ export function WarmupDialog() {
   }, [status])
 
   const acknowledged = key
-    ? acknowledgedKey === key ||
-      (typeof window !== "undefined" && localStorage.getItem(key) === "1")
+    ? acknowledgedKey === key || hasStoredAcknowledgement(key)
     : false
 
   if (!status || !key || acknowledged || status.affectedAccounts.length === 0) {
@@ -33,12 +50,17 @@ export function WarmupDialog() {
   }
 
   return (
-    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/20 px-4 backdrop-blur-sm">
+    <div
+      aria-labelledby="warmup-dialog-title"
+      aria-modal="true"
+      className="fixed inset-0 z-[80] flex items-center justify-center bg-black/20 px-4 backdrop-blur-sm"
+      role="dialog"
+    >
       <div className="w-full max-w-md rounded-2xl border border-border bg-surface p-6 shadow-2xl">
         <p className="text-xs font-medium uppercase tracking-[0.18em] text-accent">
           Reddit warm-up
         </p>
-        <h2 className="mt-2 font-serif text-2xl font-medium text-text-primary">
+        <h2 id="warmup-dialog-title" className="mt-2 font-serif text-2xl font-medium text-text-primary">
           We&apos;ll start with community-first participation.
         </h2>
         <p className="mt-3 text-sm leading-6 text-text-secondary">
@@ -59,7 +81,7 @@ export function WarmupDialog() {
         <Button
           className="mt-6 w-full"
           onClick={() => {
-            localStorage.setItem(key, "1")
+            storeAcknowledgement(key)
             setAcknowledgedKey(key)
           }}
         >
