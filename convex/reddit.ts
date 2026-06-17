@@ -5,7 +5,6 @@ import {
   internalAction,
   internalMutation,
   internalQuery,
-  mutation,
   query,
   type ActionCtx,
   type MutationCtx,
@@ -42,21 +41,19 @@ const healthStatusValidator = v.union(
   v.literal("banned"),
 )
 
-export const consumeZernioOAuthRateLimit = mutation({
+const OAUTH_RATE_LIMIT_WINDOW_MS = 60_000
+const OAUTH_RATE_LIMIT_MAX_REQUESTS = 20
+
+export const consumeZernioOAuthRateLimit = internalMutation({
   args: {
     key: v.string(),
-    now: v.number(),
-    windowMs: v.number(),
-    maxRequests: v.number(),
   },
   handler: async (ctx, args) => {
     if (args.key.length === 0 || args.key.length > 256) {
       throw new Error("Invalid rate limit key")
     }
-    if (args.windowMs <= 0 || args.maxRequests <= 0) {
-      throw new Error("Invalid rate limit config")
-    }
 
+    const now = Date.now()
     const existing = await ctx.db
       .query("oauthRateLimitBuckets")
       .withIndex("by_key", (q) => q.eq("key", args.key))
@@ -66,17 +63,17 @@ export const consumeZernioOAuthRateLimit = mutation({
       await ctx.db.insert("oauthRateLimitBuckets", {
         key: args.key,
         count: 1,
-        resetAt: args.now + args.windowMs,
-        updatedAt: args.now,
+        resetAt: now + OAUTH_RATE_LIMIT_WINDOW_MS,
+        updatedAt: now,
       })
       return { allowed: true, retryAfter: 0 }
     }
 
-    if (existing.resetAt <= args.now) {
+    if (existing.resetAt <= now) {
       await ctx.db.patch(existing._id, {
         count: 1,
-        resetAt: args.now + args.windowMs,
-        updatedAt: args.now,
+        resetAt: now + OAUTH_RATE_LIMIT_WINDOW_MS,
+        updatedAt: now,
       })
       return { allowed: true, retryAfter: 0 }
     }
@@ -84,11 +81,11 @@ export const consumeZernioOAuthRateLimit = mutation({
     const count = existing.count + 1
     await ctx.db.patch(existing._id, {
       count,
-      updatedAt: args.now,
+      updatedAt: now,
     })
 
-    const retryAfter = Math.max(1, Math.ceil((existing.resetAt - args.now) / 1000))
-    return { allowed: count <= args.maxRequests, retryAfter }
+    const retryAfter = Math.max(1, Math.ceil((existing.resetAt - now) / 1000))
+    return { allowed: count <= OAUTH_RATE_LIMIT_MAX_REQUESTS, retryAfter }
   },
 })
 

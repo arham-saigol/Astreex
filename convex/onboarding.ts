@@ -191,6 +191,7 @@ export const getOnboardingDraft = query({
       timezone: draftProject.timezone,
       redditAccounts: redditAccounts.map((account) => ({
         username: account.redditUsername,
+        isActive: account.isActive,
       })),
     }
   },
@@ -223,11 +224,14 @@ export const completeOnboarding = mutation({
     const project = await ctx.db.get(projectId)
     if (!project) throw new Error("Project not found")
     const accountLimit = planAccountLimit(project.plan)
-    const redditAccounts = await ctx.db
+    const activeRedditAccounts: Doc<"redditAccounts">[] = []
+    for await (const account of ctx.db
       .query("redditAccounts")
-      .withIndex("by_projectId", (q) => q.eq("projectId", projectId))
-      .take(100)
-    const activeRedditAccounts = redditAccounts.filter((account) => account.isActive)
+      .withIndex("by_projectId", (q) => q.eq("projectId", projectId))) {
+      if (!account.isActive) continue
+      activeRedditAccounts.push(account)
+      if (activeRedditAccounts.length > accountLimit) break
+    }
 
     if (activeRedditAccounts.length === 0) {
       throw new Error("Connect at least one Reddit account to continue")

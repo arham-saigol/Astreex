@@ -26,7 +26,7 @@ export function StepReddit({
 }: Props) {
   const [isConnecting, setIsConnecting] = useState(false)
   const maxSlots = getPlanLimits(data.plan).maxRedditAccounts
-  const connectedAccounts = data.redditAccounts
+  const connectedAccounts = data.redditAccounts.filter((account) => account.isActive)
   const hasAtLeastOne = connectedAccounts.length > 0
   const canAddMore = connectedAccounts.length < maxSlots
 

@@ -9,6 +9,7 @@ import {
 } from "./_generated/server"
 import { getPlanLimits } from "./lib/planLimits"
 import { validateSubreddit } from "./lib/zernio"
+import type { Id } from "./_generated/dataModel"
 import { getCurrentProjectOrNull, requireAuthenticatedUser } from "./lib/auth"
 
 const SUBREDDIT_LIMIT_ERROR =
@@ -294,12 +295,12 @@ export const addSubreddit = action({
       relevanceScore: number
       reasoning: string
     } = await ctx.runAction(internal.onboarding.subredditDiscovery.scoreManualSubreddit, {
-      projectId: context.projectId as never,
+      projectId: context.projectId as Id<"projects">,
       name: context.cleanName,
     })
 
     const result = await ctx.runMutation(internal.subreddits.insertManualSubreddit, {
-      projectId: context.projectId as never,
+      projectId: context.projectId as Id<"projects">,
       name: scored.name,
       memberCount: scored.memberCount,
       description: scored.description?.slice(0, 1000),
@@ -309,7 +310,7 @@ export const addSubreddit = action({
     })
     try {
       await ctx.runAction(internal.reddit.refreshProjectSubredditAccess, {
-        projectId: context.projectId as never,
+        projectId: context.projectId as Id<"projects">,
       })
     } catch {
       console.warn("Subreddit access refresh failed after manual add")

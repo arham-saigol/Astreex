@@ -1,10 +1,22 @@
 import { ConvexHttpClient } from "convex/browser"
 import { NextResponse, type NextRequest } from "next/server"
 
-import { api } from "@/convex/_generated/api"
+import { internal } from "@/convex/_generated/api"
+import type { FunctionReference } from "convex/server"
 
 const WINDOW_MS = 60_000
 const MAX_REQUESTS = 20
+const CONVEX_TIMEOUT_MS = 1_500
+
+type OAuthRateLimitMutation = FunctionReference<
+  "mutation",
+  "public",
+  { key: string },
+  { allowed: boolean; retryAfter: number }
+>
+
+const consumeZernioOAuthRateLimit =
+  internal.reddit.consumeZernioOAuthRateLimit as unknown as OAuthRateLimitMutation
 
 const buckets = new Map<string, { count: number; resetAt: number }>()
 
@@ -43,19 +55,28 @@ export async function rateLimitZernioOAuth(request: NextRequest) {
   const now = Date.now()
   const key = clientKey(request)
   const convexUrl = process.env.NEXT_PUBLIC_CONVEX_URL
+  const convexAdminKey = process.env.CONVEX_DEPLOY_KEY ?? process.env.CONVEX_SELF_HOSTED_ADMIN_KEY
 
-  if (convexUrl) {
+  if (convexUrl && convexAdminKey) {
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), CONVEX_TIMEOUT_MS)
+
     try {
-      const client = new ConvexHttpClient(convexUrl)
-      const result = await client.mutation(api.reddit.consumeZernioOAuthRateLimit, {
-        key,
-        now,
-        windowMs: WINDOW_MS,
-        maxRequests: MAX_REQUESTS,
+      const client = new ConvexHttpClient(convexUrl, {
+        fetch: (input, init) => fetch(input, { ...init, signal: controller.signal }),
       })
+      const adminClient = client as unknown as { setAdminAuth: (token: string) => void }
+      adminClient.setAdminAuth(convexAdminKey)
+      const result = await client.mutation(
+        consumeZernioOAuthRateLimit,
+        { key },
+        { skipQueue: true },
+      )
       return result.allowed ? null : tooManyRequests(result.retryAfter)
     } catch (error) {
       console.warn("Convex OAuth rate limiter unavailable; using local fallback", error)
+    } finally {
+      clearTimeout(timeout)
     }
   }
 

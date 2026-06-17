@@ -40,10 +40,8 @@ export async function getOrCreateCurrentUser(ctx: MutationCtx) {
 }
 
 export async function requireAuthenticatedUser(ctx: AuthDbCtx) {
-  const identity = await ctx.auth.getUserIdentity()
+  const { identity, user } = await findUserByIdentity(ctx)
   if (!identity) throw new Error("Not authenticated")
-
-  const user = await getCurrentUserOrNull(ctx)
   if (!user) throw new Error("User not found")
 
   return user
