@@ -56,6 +56,7 @@ export async function requireProjectAccess(ctx: AuthDbCtx, projectId: Id<"projec
   const membership = await getMembership(ctx, projectId, user._id)
   if (!membership && project.userId !== user._id) throw new Error("Not authorized")
 
+  // Legacy owner projects may not have a projectMemberships row yet.
   return { user, project, membership: membership ?? { role: "owner" as const } }
 }
 
