@@ -118,11 +118,36 @@ function accessBySubreddit(payload: unknown) {
     if (!name) continue
     const subreddit = normalizeSubredditName(name)
     const explicitCanPost = item.canPost ?? item.can_post ?? item.postable ?? item.allowed
-    const canPost = typeof explicitCanPost === "boolean" ? explicitCanPost : true
+    const canPost = typeof explicitCanPost === "boolean" ? explicitCanPost : false
     const reason = textFrom(item.reason ?? item.issue ?? item.status)
     access.set(subreddit, { canPost, reason })
   }
   return access
+}
+
+function sanitizedErrorSummary(error: unknown) {
+  const type = error instanceof Error
+    ? (error.name || "Error")
+    : error === null
+      ? "null"
+      : Array.isArray(error)
+        ? "array"
+        : typeof error
+  const status = statusFromError(error)
+  return status === undefined ? { type } : { type, status }
+}
+
+function statusFromError(error: unknown) {
+  if (!error || typeof error !== "object") return undefined
+  const record = error as Record<string, unknown>
+  const status = record.status ?? record.statusCode
+  if (typeof status === "number") return status
+  const response = record.response
+  if (response && typeof response === "object") {
+    const responseStatus = (response as Record<string, unknown>).status
+    if (typeof responseStatus === "number") return responseStatus
+  }
+  return undefined
 }
 
 function summarizeWarmupMode(accounts: Doc<"redditAccounts">[]) {
@@ -517,13 +542,17 @@ export const loadProjectSafetySyncTargets = internalQuery({
 export const pageProjectsForSafetySync = internalQuery({
   args: {
     planStatus: v.union(v.literal("trialing"), v.literal("active")),
+    cursor: v.union(v.string(), v.null()),
   },
   handler: async (ctx, args) => {
-    const projects = await ctx.db
+    const page = await ctx.db
       .query("projects")
       .withIndex("by_planStatus", (q) => q.eq("planStatus", args.planStatus))
-      .take(200)
-    return projects.map((project) => project._id)
+      .paginate({ numItems: 200, cursor: args.cursor })
+    return {
+      projectIds: page.page.map((project) => project._id),
+      cursor: page.isDone ? null : page.continueCursor,
+    }
   },
 })
 
@@ -622,11 +651,16 @@ async function refreshAccountSafetyData(
   if (!target) return null
 
   const checkedAt = Date.now()
+  const [profileResult, subredditsResult] = await Promise.allSettled([
+    userProfile(ctx, target.account.redditUsername),
+    target.subreddits.length > 0
+      ? getRedditSubreddits(ctx, target.account.zernioAccountId)
+      : Promise.resolve(null),
+  ])
 
   try {
-    const profile = normalizeRedditUserProfile(
-      await userProfile(ctx, target.account.redditUsername),
-    )
+    if (profileResult.status === "rejected") throw profileResult.reason
+    const profile = normalizeRedditUserProfile(profileResult.value)
     const decision = decideRedditActivityStatus(profile, checkedAt)
     await ctx.runMutation(internal.reddit.saveAccountActivity, {
       redditAccountId,
@@ -639,7 +673,7 @@ async function refreshAccountSafetyData(
       checkedAt,
     })
   } catch (error) {
-    console.warn("Reddit activity sync failed", redditAccountId, error)
+    console.warn("Reddit activity sync failed", redditAccountId, sanitizedErrorSummary(error))
     await ctx.runMutation(internal.reddit.saveAccountActivity, {
       redditAccountId,
       activityStatus: "warmup",
@@ -651,9 +685,8 @@ async function refreshAccountSafetyData(
   if (target.subreddits.length === 0) return null
 
   try {
-    const access = accessBySubreddit(
-      await getRedditSubreddits(ctx, target.account.zernioAccountId),
-    )
+    if (subredditsResult.status === "rejected") throw subredditsResult.reason
+    const access = accessBySubreddit(subredditsResult.value)
     await ctx.runMutation(internal.reddit.saveSubredditAccessRows, {
       redditAccountId,
       projectId: target.account.projectId,
@@ -670,7 +703,7 @@ async function refreshAccountSafetyData(
       }),
     })
   } catch (error) {
-    console.warn("Reddit subreddit access sync failed", redditAccountId, error)
+    console.warn("Reddit subreddit access sync failed", redditAccountId, sanitizedErrorSummary(error))
     await ctx.runMutation(internal.reddit.saveSubredditAccessRows, {
       redditAccountId,
       projectId: target.account.projectId,
@@ -716,19 +749,23 @@ export const refreshAllRedditSafety = internalAction({
   handler: async (ctx) => {
     const statuses: Array<"active" | "trialing"> = ["active", "trialing"]
     for (const planStatus of statuses) {
-      const projectIds: Id<"projects">[] = await ctx.runQuery(
-        internal.reddit.pageProjectsForSafetySync,
-        { planStatus },
-      )
-      for (const projectId of projectIds) {
-        const accountIds: Id<"redditAccounts">[] = await ctx.runQuery(
-          internal.reddit.loadProjectSafetySyncTargets,
-          { projectId },
+      let cursor: string | null = null
+      do {
+        const page: { projectIds: Id<"projects">[]; cursor: string | null } = await ctx.runQuery(
+          internal.reddit.pageProjectsForSafetySync,
+          { planStatus, cursor },
         )
-        await Promise.all(accountIds.map((accountId) =>
-          refreshAccountSafetyData(ctx, accountId),
-        ))
-      }
+        for (const projectId of page.projectIds) {
+          const accountIds: Id<"redditAccounts">[] = await ctx.runQuery(
+            internal.reddit.loadProjectSafetySyncTargets,
+            { projectId },
+          )
+          await Promise.all(accountIds.map((accountId) =>
+            refreshAccountSafetyData(ctx, accountId),
+          ))
+        }
+        cursor = page.cursor
+      } while (cursor !== null)
     }
     return null
   },
