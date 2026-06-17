@@ -1,11 +1,11 @@
 "use client"
 
 import { useMemo, useState } from "react"
-import { usePathname } from "next/navigation"
 import { useQuery } from "convex/react"
 import { AlertTriangle, Info, X } from "lucide-react"
 
 import { api } from "@/convex/_generated/api"
+import { useProjectRefFromPath } from "@/hooks/use-project-ref-from-path"
 import { cn } from "@/lib/utils"
 
 const dismissalKey = "astreex-dismissed-notifications"
@@ -45,11 +45,6 @@ function bannerClasses(severity: BannerSeverity) {
   }
 
   return "border-accent/30 bg-accent-subtle text-accent"
-}
-
-function useProjectRefFromPath() {
-  const pathname = usePathname()
-  return pathname.match(/^\/projects\/([^/]+)/)?.[1] ?? null
 }
 
 export function NotificationBanner() {

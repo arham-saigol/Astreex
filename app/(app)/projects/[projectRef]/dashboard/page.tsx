@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useState } from "react"
 import Link from "next/link"
 import { useParams, useRouter } from "next/navigation"
 import { useQuery } from "convex/react"
@@ -52,6 +52,13 @@ function healthLabel(status: HealthStatus) {
   if (status === "warning") return "Warning"
   if (status === "banned") return "Banned"
   return "Healthy"
+}
+
+function previewTrendData() {
+  return Array.from({ length: 7 }, (_, index) => ({
+    period: `Day ${index + 1}`,
+    karma: 0,
+  }))
 }
 
 function HealthDot({ status }: { status: HealthStatus }) {
@@ -380,10 +387,13 @@ export default function DashboardPage() {
     ? { projectRef: context.projectRef, timeframe }
     : "skip"
 
+  const hasGrowthAnalytics = context?.plan === "growth" || context?.plan === "scale"
+  const gatedQueryArgs = hasGrowthAnalytics ? queryArgs : "skip"
+
   const metrics = useQuery(api.analytics.getDashboardMetrics, queryArgs)
   const recentActivity = useQuery(api.analytics.getRecentActivity, queryArgs)
-  const trendData = useQuery(api.analytics.getTrendData, queryArgs)
-  const bestPerforming = useQuery(api.analytics.getBestPerforming, queryArgs)
+  const trendData = useQuery(api.analytics.getTrendData, gatedQueryArgs)
+  const bestPerforming = useQuery(api.analytics.getBestPerforming, gatedQueryArgs)
 
   useEffect(() => {
     const stored = window.localStorage.getItem("astreex-dashboard-timeframe")
@@ -396,11 +406,6 @@ export default function DashboardPage() {
     if (timeframe === null) return
     window.localStorage.setItem("astreex-dashboard-timeframe", timeframe)
   }, [timeframe])
-
-  const hasGrowthAnalytics = useMemo(() => {
-    const plan = context?.plan
-    return plan === "growth" || plan === "scale"
-  }, [context?.plan])
 
   const showRefreshShimmer = false
 
@@ -424,13 +429,14 @@ export default function DashboardPage() {
   if (
     metrics === undefined ||
     recentActivity === undefined ||
-    trendData === undefined ||
-    bestPerforming === undefined
+    (hasGrowthAnalytics && (trendData === undefined || bestPerforming === undefined))
   ) {
     return <DashboardSkeleton />
   }
 
   const plan = context.plan as Plan
+  const displayedTrendData = trendData ?? previewTrendData()
+  const displayedBestPerforming = bestPerforming ?? []
 
   return (
     <div className="space-y-8">
@@ -440,7 +446,7 @@ export default function DashboardPage() {
         </h1>
         <div className="flex items-center gap-2">
           {plan === "scale" ? (
-            <Button variant="outline" size="sm" className="gap-1.5">
+            <Button variant="outline" size="sm" className="gap-1.5" disabled>
               <Download className="size-3.5" />
               Export CSV
             </Button>
@@ -475,10 +481,10 @@ export default function DashboardPage() {
 
       <Section title="Engagement Trend">
         {hasGrowthAnalytics ? (
-          <TrendChart data={trendData} isShimmering={showRefreshShimmer} />
+          <TrendChart data={displayedTrendData} isShimmering={showRefreshShimmer} />
         ) : (
           <GatedSection>
-            <TrendChart data={trendData} isShimmering={showRefreshShimmer} />
+            <TrendChart data={displayedTrendData} isShimmering={showRefreshShimmer} />
           </GatedSection>
         )}
       </Section>
@@ -489,12 +495,12 @@ export default function DashboardPage() {
 
       <Section title="Best Performing">
         {hasGrowthAnalytics ? (
-          <BestPerformingList items={bestPerforming} isShimmering={showRefreshShimmer} />
+          <BestPerformingList items={displayedBestPerforming} isShimmering={showRefreshShimmer} />
         ) : (
           <GatedSection>
             <div className="p-4">
               <BestPerformingList
-                items={bestPerforming}
+                items={displayedBestPerforming}
                 isShimmering={showRefreshShimmer}
               />
             </div>

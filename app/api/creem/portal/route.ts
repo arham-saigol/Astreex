@@ -3,10 +3,14 @@ import { NextResponse, type NextRequest } from "next/server"
 import { api } from "@/convex/_generated/api"
 import { createCreemClient } from "@/lib/creemClient"
 import { getAuthedConvexClient } from "../../convex-client"
+import { rateLimitCreem } from "../rateLimiter"
 
 export const runtime = "nodejs"
 
 export async function POST(request: NextRequest) {
+  const rateLimited = rateLimitCreem(request)
+  if (rateLimited) return rateLimited
+
   let body: unknown
   try {
     body = await request.json()

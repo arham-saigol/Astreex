@@ -1,7 +1,7 @@
 "use client"
 
-import { useState } from "react"
 import Link from "next/link"
+import { useSearchParams } from "next/navigation"
 import { useQuery } from "convex/react"
 import { Plus } from "lucide-react"
 
@@ -25,9 +25,8 @@ function statusLabel(status: PlanStatus, onboardingStatus: string | null) {
 
 export default function ProjectDashboardPage() {
   const data = useQuery(api.projects.listAccessibleProjects)
-  const [invitedProject] = useState(() =>
-    typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("invitedProject") : null,
-  )
+  const searchParams = useSearchParams()
+  const invitedProject = searchParams.get("invitedProject")
 
   if (data === undefined) {
     return (

@@ -51,11 +51,18 @@ export async function getCurrentProjectOrNull(ctx: AuthDbCtx) {
   const user = await getCurrentUserOrNull(ctx)
   if (!user) return null
 
-  const membership = await ctx.db
+  const memberships: Doc<"projectMemberships">[] = []
+  for await (const membership of ctx.db
     .query("projectMemberships")
-    .withIndex("by_userId", (q) => q.eq("userId", user._id))
-    .first()
-  const membershipProject = membership ? await ctx.db.get(membership.projectId) : null
+    .withIndex("by_userId", (q) => q.eq("userId", user._id))) {
+    memberships.push(membership)
+  }
+  const membershipProjects = await Promise.all(
+    memberships.map((membership) => ctx.db.get(membership.projectId)),
+  )
+  const membershipProject = membershipProjects
+    .filter((project): project is Doc<"projects"> => Boolean(project))
+    .sort((a, b) => b.lastActiveAt - a.lastActiveAt)[0]
   if (membershipProject) return { user, project: membershipProject }
 
   const project = await ctx.db

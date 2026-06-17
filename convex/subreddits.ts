@@ -10,7 +10,7 @@ import {
 import { getPlanLimits } from "./lib/planLimits"
 import { validateSubreddit } from "./lib/zernio"
 import type { Id } from "./_generated/dataModel"
-import { requireAuthenticatedUser, requireProjectAccess } from "./lib/auth"
+import { requireProjectAccess } from "./lib/auth"
 import { requireProjectAccessByRef } from "./lib/projectRefs"
 
 const SUBREDDIT_LIMIT_ERROR =
@@ -21,15 +21,16 @@ export const getSubreddits = query({
   handler: async (ctx, args) => {
     const { project } = await requireProjectAccessByRef(ctx, args.projectRef)
 
-    const subreddits = await ctx.db
-      .query("subreddits")
-      .withIndex("by_projectId", (q) => q.eq("projectId", project._id))
-      .take(200)
-
-    const accounts = await ctx.db
-      .query("redditAccounts")
-      .withIndex("by_projectId", (q) => q.eq("projectId", project._id))
-      .take(50)
+    const [subreddits, accounts] = await Promise.all([
+      ctx.db
+        .query("subreddits")
+        .withIndex("by_projectId", (q) => q.eq("projectId", project._id))
+        .take(200),
+      ctx.db
+        .query("redditAccounts")
+        .withIndex("by_projectId", (q) => q.eq("projectId", project._id))
+        .take(50),
+    ])
     const activeAccounts = accounts.filter((account) => account.isActive)
 
     const accessRows = await Promise.all(subreddits.map((subreddit) =>
@@ -158,21 +159,11 @@ function validZernioValidation(payload: unknown) {
 
 export const loadManualAddContext = internalQuery({
   args: {
-    projectRef: v.optional(v.string()),
+    projectRef: v.string(),
     name: v.string(),
   },
   handler: async (ctx, args) => {
-    const project = args.projectRef
-      ? (await requireProjectAccessByRef(ctx, args.projectRef)).project
-      : await (async () => {
-          const user = await requireAuthenticatedUser(ctx)
-          const owned = await ctx.db
-            .query("projects")
-            .withIndex("by_userId", (q) => q.eq("userId", user._id))
-            .first()
-          if (!owned) throw new Error("No project found")
-          return owned
-        })()
+    const project = (await requireProjectAccessByRef(ctx, args.projectRef)).project
     const cleanName = normalizeSubredditName(args.name)
 
     // Check for duplicate
@@ -264,7 +255,7 @@ export const insertManualSubreddit = internalMutation({
 
 export const addSubreddit = action({
   args: {
-    projectRef: v.optional(v.string()),
+    projectRef: v.string(),
     name: v.string(),
   },
   handler: async (ctx, args): Promise<{
@@ -275,7 +266,7 @@ export const addSubreddit = action({
   }> => {
     const context: { projectId: string; cleanName: string } = await ctx.runQuery(
       internal.subreddits.loadManualAddContext,
-      { ...(args.projectRef ? { projectRef: args.projectRef } : {}), name: args.name },
+      { projectRef: args.projectRef, name: args.name },
     )
 
     const validation = await validateSubreddit(ctx, context.cleanName)

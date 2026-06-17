@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect, useCallback } from "react"
-import { useRouter } from "next/navigation"
+import { useRouter, useSearchParams } from "next/navigation"
 import { useMutation, useQuery } from "convex/react"
 import { motion, AnimatePresence } from "framer-motion"
 import { toast } from "sonner"
@@ -29,8 +29,8 @@ const TOTAL_STEPS = 4
 
 export default function OnboardingPage() {
   const router = useRouter()
-  const isNewProject =
-    typeof window !== "undefined" && new URLSearchParams(window.location.search).get("new") === "1"
+  const searchParams = useSearchParams()
+  const isNewProject = searchParams.get("new") === "1"
   const status = useQuery(api.onboarding.getOnboardingStatus)
   const draft = useQuery(api.onboarding.getOnboardingDraft)
   const prepareOnboardingProject = useMutation(api.onboarding.prepareOnboardingProject)
@@ -57,7 +57,9 @@ export default function OnboardingPage() {
 
   // Redirect only if normal onboarding is complete. /onboarding?new=1 always creates a project.
   useEffect(() => {
-    if (!isNewProject && status?.hasProjects) {
+    const hasFinishedOnboarding =
+      status?.hasCompletedOnboarding || status?.skippedInitialOnboarding
+    if (!isNewProject && hasFinishedOnboarding) {
       router.replace("/dashboard")
     }
   }, [isNewProject, status, router])
@@ -69,7 +71,13 @@ export default function OnboardingPage() {
     }
     if (searchParams.get("reddit_error")) {
       toast.error("Reddit connection failed. Please try again.")
-      window.history.replaceState(null, "", "/onboarding?step=4")
+      searchParams.delete("reddit_error")
+      const query = searchParams.toString()
+      window.history.replaceState(
+        null,
+        "",
+        `${window.location.pathname}${query ? `?${query}` : ""}`,
+      )
     }
   }, [])
 
@@ -156,13 +164,9 @@ export default function OnboardingPage() {
     setIsSubmitting(true)
     setSubmitError(null)
     try {
+      if (!data.projectRef) throw new Error("Project setup is incomplete.")
       await completeOnboarding({
-        projectName: data.projectName,
-        websiteUrl: data.websiteUrl,
-        competitorUrls: data.competitorUrls,
-        plan: data.plan,
-        timezone: data.timezone,
-        newProject: isNewProject,
+        projectRef: data.projectRef,
       })
       router.replace("/dashboard")
     } catch (error) {
@@ -171,11 +175,16 @@ export default function OnboardingPage() {
     } finally {
       setIsSubmitting(false)
     }
-  }, [completeOnboarding, data, isNewProject, router])
+  }, [completeOnboarding, data.projectRef, router])
 
-  // Show nothing while checking status
-  if (status === undefined || (!isNewProject && status?.hasProjects)) {
-    return null
+  if (status === undefined) {
+    return <div className="h-80 w-full animate-pulse rounded-xl bg-muted" />
+  }
+
+  const hasFinishedOnboarding =
+    status.hasCompletedOnboarding || status.skippedInitialOnboarding
+  if (!isNewProject && hasFinishedOnboarding) {
+    return <div className="h-80 w-full animate-pulse rounded-xl bg-muted" />
   }
 
   const variants = {

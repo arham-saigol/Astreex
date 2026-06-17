@@ -16,13 +16,14 @@ export function slugifyProjectName(name: string) {
 }
 
 export function newProjectPublicId() {
-  const bytes = new Uint8Array(5)
+  const bytes = new Uint8Array(16)
   crypto.getRandomValues(bytes)
   return `p_${Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")}`
 }
 
-export function projectRefFor(project: Pick<Doc<"projects">, "name" | "publicId" | "slug" | "_id">) {
-  return `${project.slug ?? slugifyProjectName(project.name)}-${project.publicId ?? `p_${String(project._id).slice(-10)}`}`
+export function projectRefFor(project: Pick<Doc<"projects">, "name" | "publicId" | "slug">) {
+  if (!project.publicId) throw new Error("Project publicId is missing")
+  return `${project.slug ?? slugifyProjectName(project.name)}-${project.publicId}`
 }
 
 export function parseProjectPublicId(projectRef: string) {

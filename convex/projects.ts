@@ -1,38 +1,43 @@
 import { v } from "convex/values"
 import { internalMutation, mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server"
-import type { Id } from "./_generated/dataModel"
+import type { Doc, Id } from "./_generated/dataModel"
 import { getCurrentUserOrNull, getOrCreateCurrentUser } from "./lib/auth"
 import {
   ensureOwnerMembership,
-  getProjectByPublicId,
   newProjectPublicId,
   parseProjectPublicId,
   projectRefFor,
   requireProjectAccessByRef,
+  requireProjectOwnerByRef,
   slugifyProjectName,
 } from "./lib/projectRefs"
 
 async function accessibleProjects(ctx: QueryCtx | MutationCtx, userId: Id<"users">) {
-  const memberships = await ctx.db
-    .query("projectMemberships")
-    .withIndex("by_userId", (q) => q.eq("userId", userId))
-    .take(100)
+  const [memberships, owned] = await Promise.all([
+    ctx.db
+      .query("projectMemberships")
+      .withIndex("by_userId", (q) => q.eq("userId", userId))
+      .take(100),
+    ctx.db
+      .query("projects")
+      .withIndex("by_userId", (q) => q.eq("userId", userId))
+      .take(100),
+  ])
 
   const byId = new Map<Id<"projects">, "owner" | "member">()
   for (const membership of memberships) byId.set(membership.projectId, membership.role)
-
-  const owned = await ctx.db
-    .query("projects")
-    .withIndex("by_userId", (q) => q.eq("userId", userId))
-    .take(100)
   for (const project of owned) byId.set(project._id, "owner")
 
-  const projects = []
-  for (const [projectId, role] of byId) {
-    const project = await ctx.db.get(projectId)
-    if (!project) continue
-    projects.push({ project, role })
-  }
+  const rows = await Promise.all(
+    [...byId].map(async ([projectId, role]) => ({
+      project: await ctx.db.get(projectId),
+      role,
+    })),
+  )
+  const projects = rows.filter(
+    (row): row is { project: Doc<"projects">; role: "owner" | "member" } =>
+      row.project !== null,
+  )
 
   projects.sort((a, b) => b.project.lastActiveAt - a.project.lastActiveAt)
   return projects
@@ -92,49 +97,69 @@ export const backfillPublicProjectIdentity = internalMutation({
   args: { limit: v.optional(v.number()) },
   handler: async (ctx, args) => {
     const limit = args.limit ?? 100
-    const projects = await ctx.db.query("projects").take(limit)
+    let projectsCursor: string | null = null
     let patchedProjects = 0
     let insertedMemberships = 0
 
-    for (const project of projects) {
-      const patch: { publicId?: string; slug?: string } = {}
-      if (!project.publicId) patch.publicId = newProjectPublicId()
-      if (!project.slug) patch.slug = slugifyProjectName(project.name)
-      if (patch.publicId || patch.slug) {
-        await ctx.db.patch(project._id, patch)
-        patchedProjects++
+    do {
+      const page = await ctx.db.query("projects").paginate({
+        numItems: limit,
+        cursor: projectsCursor,
+      })
+      projectsCursor = page.continueCursor
+
+      for (const project of page.page) {
+        const patch: { publicId?: string; slug?: string } = {}
+        if (!project.publicId) patch.publicId = newProjectPublicId()
+        if (!project.slug) patch.slug = slugifyProjectName(project.name)
+        if (patch.publicId || patch.slug) {
+          await ctx.db.patch(project._id, patch)
+          patchedProjects++
+        }
+
+        const membership = await ctx.db
+          .query("projectMemberships")
+          .withIndex("by_projectId_and_userId", (q) =>
+            q.eq("projectId", project._id).eq("userId", project.userId),
+          )
+          .unique()
+        if (!membership) {
+          await ctx.db.insert("projectMemberships", {
+            projectId: project._id,
+            userId: project.userId,
+            role: "owner",
+            createdAt: project.createdAt,
+          })
+          insertedMemberships++
+        }
       }
 
-      const membership = await ctx.db
-        .query("projectMemberships")
-        .withIndex("by_projectId_and_userId", (q) =>
-          q.eq("projectId", project._id).eq("userId", project.userId),
-        )
-        .unique()
-      if (!membership) {
-        await ctx.db.insert("projectMemberships", {
-          projectId: project._id,
-          userId: project.userId,
-          role: "owner",
-          createdAt: project.createdAt,
-        })
-        insertedMemberships++
-      }
-    }
+      if (page.isDone) break
+    } while (true)
 
-    const users = await ctx.db.query("users").take(limit)
+    let usersCursor: string | null = null
     let patchedUsers = 0
-    for (const user of users) {
-      if (user.firstCreatedProjectId) continue
-      const first = await ctx.db
-        .query("projects")
-        .withIndex("by_userId", (q) => q.eq("userId", user._id))
-        .first()
-      if (first) {
-        await ctx.db.patch(user._id, { firstCreatedProjectId: first._id })
-        patchedUsers++
+    do {
+      const page = await ctx.db.query("users").paginate({
+        numItems: limit,
+        cursor: usersCursor,
+      })
+      usersCursor = page.continueCursor
+
+      for (const user of page.page) {
+        if (user.firstCreatedProjectId) continue
+        const first = await ctx.db
+          .query("projects")
+          .withIndex("by_userId", (q) => q.eq("userId", user._id))
+          .first()
+        if (first) {
+          await ctx.db.patch(user._id, { firstCreatedProjectId: first._id })
+          patchedUsers++
+        }
       }
-    }
+
+      if (page.isDone) break
+    } while (true)
 
     return { patchedProjects, insertedMemberships, patchedUsers }
   },
@@ -160,9 +185,7 @@ export const ensureProjectIdentityForTests = internalMutation({
 export const getProjectByRefForServer = query({
   args: { projectRef: v.string() },
   handler: async (ctx, args) => {
-    const publicId = parseProjectPublicId(args.projectRef)
-    const project = await getProjectByPublicId(ctx, publicId)
-    if (!project) throw new Error("Project not found")
+    const { project } = await requireProjectOwnerByRef(ctx, args.projectRef)
     return { projectId: project._id, projectRef: projectRefFor(project) }
   },
 })

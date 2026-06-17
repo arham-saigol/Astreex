@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useRef, useState, type ReactElement } from "react"
+import { useCallback, useEffect, useRef, useState, type MutableRefObject, type ReactElement } from "react"
 import { useParams } from "next/navigation"
 import { useMutation, useQuery } from "convex/react"
 import { AnimatePresence, motion, useMotionValue, useTransform } from "framer-motion"
@@ -262,21 +262,22 @@ function SwipeCard({
   onDecline,
   isExiting,
   exitDirection,
+  approveRef,
 }: {
   card: EnrichedCard
   onApprove: (editedContent?: string) => void
   onDecline: () => void
   isExiting: boolean
   exitDirection: "left" | "right" | null
+  approveRef: MutableRefObject<() => void>
 }) {
+  const initialParts = card.type === "original" ? card.draftContent.split("\n") : []
+  const [initialTitle] = useState(card.type === "original" ? initialParts[0] ?? "" : "")
+  const [initialBody] = useState(card.type === "original" ? initialParts.slice(1).join("\n") : "")
   const [editMode, setEditMode] = useState(false)
   const [editedContent, setEditedContent] = useState(card.draftContent)
-  const [editedTitle, setEditedTitle] = useState(
-    card.type === "original" ? card.draftContent.split("\n")[0] ?? "" : ""
-  )
-  const [editedBody, setEditedBody] = useState(
-    card.type === "original" ? card.draftContent.split("\n").slice(1).join("\n") : ""
-  )
+  const [editedTitle, setEditedTitle] = useState(initialTitle)
+  const [editedBody, setEditedBody] = useState(initialBody)
 
   // Keyboard shortcut for E key
   useEffect(() => {
@@ -297,17 +298,25 @@ function SwipeCard({
   const greenOpacity = useTransform(x, [0, 100], [0, 0.15])
   const redOpacity = useTransform(x, [-100, 0], [0.15, 0])
 
-  function getEditedText(): string | undefined {
+  const getEditedText = useCallback((): string | undefined => {
     if (card.type === "reply") {
       return editedContent !== card.draftContent ? editedContent : undefined
     }
-    const combined = `${editedTitle}\n${editedBody}`
-    return combined !== card.draftContent ? combined : undefined
-  }
+    if (editedTitle === initialTitle && editedBody === initialBody) return undefined
+    return `${editedTitle}\n${editedBody}`
+  }, [card.type, card.draftContent, editedBody, editedContent, editedTitle, initialBody, initialTitle])
+
+  const approveWithCurrentEdits = useCallback(() => {
+    onApprove(getEditedText())
+  }, [getEditedText, onApprove])
+
+  useEffect(() => {
+    approveRef.current = approveWithCurrentEdits
+  }, [approveRef, approveWithCurrentEdits])
 
   function handleDragEnd(_: unknown, info: { offset: { x: number } }) {
     if (info.offset.x > 100) {
-      onApprove(getEditedText())
+      approveWithCurrentEdits()
     } else if (info.offset.x < -100) {
       onDecline()
     }
@@ -529,7 +538,7 @@ export default function FeedPage() {
   const approveCard = useMutation(api.cards.approveCard)
   const declineCard = useMutation(api.cards.declineCard)
 
-  const [currentIndex, setCurrentIndex] = useState(0)
+  const [dismissedCardIds, setDismissedCardIds] = useState<Set<string>>(() => new Set())
   const [exitDirection, setExitDirection] = useState<"left" | "right" | null>(null)
   const [isExiting, setIsExiting] = useState(false)
   const [decisions, setDecisions] = useState<Array<"approved" | "declined">>([])
@@ -544,20 +553,21 @@ export default function FeedPage() {
     return <CardSkeleton />
   }
 
-  // Empty state
-  if (cards.length === 0) {
-    return <EmptyState pipelineFailedToday={feedStatus?.pipelineFailedToday} />
-  }
-
-  const totalCards = cards.length
-  const isComplete = currentIndex >= totalCards
-  const currentCard = isComplete ? null : (cards[currentIndex] as EnrichedCard)
+  const visibleCards = cards.filter((card) => !dismissedCardIds.has(card._id))
+  const currentCard = visibleCards[0] as EnrichedCard | undefined
+  const totalCards = decisions.length + visibleCards.length
+  const currentPosition = decisions.length
 
   const approvedCount = decisions.filter((d) => d === "approved").length
   const declinedCount = decisions.filter((d) => d === "declined").length
 
+  // Empty state
+  if (cards.length === 0 && decisions.length === 0) {
+    return <EmptyState pipelineFailedToday={feedStatus?.pipelineFailedToday} />
+  }
+
   // Completion state
-  if (isComplete || !currentCard) {
+  if (!currentCard) {
     return <CompletionState approved={approvedCount} declined={declinedCount} />
   }
 
@@ -565,20 +575,24 @@ export default function FeedPage() {
     if (!currentCard || isExiting) return
     setExitDirection("right")
     setIsExiting(true)
+    const cardId = currentCard._id
     setDecisions((prev) => [...prev, "approved"])
+    setDismissedCardIds((prev) => new Set(prev).add(cardId))
 
     try {
       await approveCard({
-        cardId: currentCard._id,
+        cardId,
         editedContent: editedContent,
       })
-      setTimeout(() => {
-        setCurrentIndex((i) => i + 1)
-        resetExitState()
-      }, 300)
+      setTimeout(resetExitState, 300)
     } catch {
       toast.error("Card approval failed. Please try again.")
       setDecisions((prev) => prev.slice(0, -1))
+      setDismissedCardIds((prev) => {
+        const next = new Set(prev)
+        next.delete(cardId)
+        return next
+      })
       resetExitState()
     }
   }
@@ -587,17 +601,21 @@ export default function FeedPage() {
     if (!currentCard || isExiting) return
     setExitDirection("left")
     setIsExiting(true)
+    const cardId = currentCard._id
     setDecisions((prev) => [...prev, "declined"])
+    setDismissedCardIds((prev) => new Set(prev).add(cardId))
 
     try {
-      await declineCard({ cardId: currentCard._id })
-      setTimeout(() => {
-        setCurrentIndex((i) => i + 1)
-        resetExitState()
-      }, 300)
+      await declineCard({ cardId })
+      setTimeout(resetExitState, 300)
     } catch {
       toast.error("Card decline failed. Please try again.")
       setDecisions((prev) => prev.slice(0, -1))
+      setDismissedCardIds((prev) => {
+        const next = new Set(prev)
+        next.delete(cardId)
+        return next
+      })
       resetExitState()
     }
   }
@@ -605,7 +623,7 @@ export default function FeedPage() {
   return (
     <FeedContent
       card={currentCard}
-      currentIndex={currentIndex}
+      currentPosition={currentPosition}
       totalCards={totalCards}
       isExiting={isExiting}
       exitDirection={exitDirection}
@@ -621,7 +639,7 @@ export default function FeedPage() {
 
 function FeedContent({
   card,
-  currentIndex,
+  currentPosition,
   totalCards,
   isExiting,
   exitDirection,
@@ -629,13 +647,14 @@ function FeedContent({
   onDecline,
 }: {
   card: EnrichedCard
-  currentIndex: number
+  currentPosition: number
   totalCards: number
   isExiting: boolean
   exitDirection: "left" | "right" | null
   onApprove: (editedContent?: string) => void
   onDecline: () => void
 }) {
+  const approveRef = useRef<() => void>(() => onApprove())
   // Keyboard shortcuts
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
@@ -644,7 +663,7 @@ function FeedContent({
 
       if (e.key === "ArrowRight") {
         e.preventDefault()
-        onApprove()
+        approveRef.current()
       } else if (e.key === "ArrowLeft") {
         e.preventDefault()
         onDecline()
@@ -658,7 +677,7 @@ function FeedContent({
     <div className="flex flex-col items-center pt-4">
       {/* Card counter */}
       <p className="mb-4 text-sm text-text-secondary">
-        {currentIndex + 1} of {totalCards}
+        {currentPosition + 1} of {totalCards}
       </p>
 
       {/* Swipeable card area */}
@@ -671,6 +690,7 @@ function FeedContent({
             onDecline={onDecline}
             isExiting={isExiting}
             exitDirection={exitDirection}
+            approveRef={approveRef}
           />
         </AnimatePresence>
       </div>
@@ -692,7 +712,7 @@ function FeedContent({
         <ShortcutButton shortcut="Right arrow to approve">
           <Button
             size="lg"
-            onClick={() => onApprove()}
+            onClick={() => approveRef.current()}
             disabled={isExiting}
             className="gap-1.5"
           >

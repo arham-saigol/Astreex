@@ -151,6 +151,10 @@ async function findWebhookProject(
     if (project) return project
   }
 
+  if (args.projectId) {
+    return await ctx.db.get(args.projectId as Id<"projects">)
+  }
+
   if (args.customerId) {
     const project = await ctx.db
       .query("projects")
@@ -159,10 +163,6 @@ async function findWebhookProject(
       )
       .first()
     if (project) return project
-  }
-
-  if (args.projectId) {
-    return await ctx.db.get(args.projectId as Id<"projects">)
   }
 
   return null

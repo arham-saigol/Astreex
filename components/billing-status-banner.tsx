@@ -1,17 +1,12 @@
 "use client"
 
 import { useState } from "react"
-import { usePathname } from "next/navigation"
 import { useQuery } from "convex/react"
 import { toast } from "sonner"
 
 import { api } from "@/convex/_generated/api"
 import { Button } from "@/components/ui/button"
-
-function useProjectRefFromPath() {
-  const pathname = usePathname()
-  return pathname.match(/^\/projects\/([^/]+)/)?.[1] ?? null
-}
+import { useProjectRefFromPath } from "@/hooks/use-project-ref-from-path"
 
 export function BillingStatusBanner() {
   const projectRef = useProjectRefFromPath()

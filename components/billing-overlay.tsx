@@ -1,16 +1,11 @@
 "use client"
 
-import { usePathname } from "next/navigation"
 import { useQuery } from "convex/react"
 
 import { api } from "@/convex/_generated/api"
 import { BillingStatusBanner } from "@/components/billing-status-banner"
 import { UpgradeDialog } from "@/components/upgrade-dialog"
-
-function useProjectRefFromPath() {
-  const pathname = usePathname()
-  return pathname.match(/^\/projects\/([^/]+)/)?.[1] ?? null
-}
+import { useProjectRefFromPath } from "@/hooks/use-project-ref-from-path"
 
 export function BillingOverlay() {
   const projectRef = useProjectRefFromPath()

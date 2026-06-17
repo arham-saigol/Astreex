@@ -99,10 +99,7 @@ function Toggle({
       role="switch"
       aria-checked={checked}
       disabled={disabled}
-      onClick={(e) => {
-        e.stopPropagation()
-        onChange(!checked)
-      }}
+      onClick={() => onChange(!checked)}
       className={cn(
         "relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full transition-colors duration-200",
         checked ? "bg-accent" : "bg-border",
@@ -132,11 +129,21 @@ function SubredditRow({
   onToggle: (active: boolean) => void
 }) {
   return (
-    <button
-      type="button"
-      onClick={onSelect}
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={(event) => {
+        if ((event.target as HTMLElement).closest("[data-row-toggle]")) return
+        onSelect()
+      }}
+      onKeyDown={(event) => {
+        if (event.currentTarget !== event.target) return
+        if (event.key !== "Enter" && event.key !== " ") return
+        event.preventDefault()
+        onSelect()
+      }}
       className={cn(
-        "flex w-full items-center gap-3 rounded-lg px-3 transition-colors duration-100",
+        "flex w-full cursor-pointer items-center gap-3 rounded-lg px-3 transition-colors duration-100",
         "hover:bg-muted/60",
         isSelected && "bg-muted/80",
         !sub.active && "opacity-55"
@@ -165,10 +172,10 @@ function SubredditRow({
       </span>
 
       {/* Toggle */}
-      <div className="shrink-0 pl-3">
+      <div className="shrink-0 pl-3" data-row-toggle>
         <Toggle checked={sub.active} onChange={onToggle} disabled={sub.pending} />
       </div>
-    </button>
+    </div>
   )
 }
 
@@ -474,6 +481,11 @@ export default function RadarPage() {
 
       try {
         await toggleSubreddit({ subredditId: id as Id<"subreddits">, active: newActive })
+        setOptimisticToggles((prev) => {
+          const next = { ...prev }
+          delete next[id]
+          return next
+        })
       } catch (err: unknown) {
         // Revert optimistic update
         setOptimisticToggles((prev) => {

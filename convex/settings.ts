@@ -83,6 +83,8 @@ async function deleteProjectRows(
     "subreddits",
     "redditAccounts",
     "projectIntelligenceProfiles",
+    "projectMemberships",
+    "projectInvitations",
   ] as const
 
   let deletedRows = 0
@@ -115,6 +117,8 @@ async function hasProjectRows(ctx: MutationCtx, projectId: Id<"projects">) {
     "subreddits",
     "redditAccounts",
     "projectIntelligenceProfiles",
+    "projectMemberships",
+    "projectInvitations",
   ] as const
 
   for (const table of tables) {
@@ -163,21 +167,22 @@ export const getSettingsContext = query({
   args: { projectRef: v.string() },
   handler: async (ctx, args) => {
     const { user, project, membership } = await requireProjectAccessByRef(ctx, args.projectRef)
-    const brand = await ctx.db
-      .query("projectIntelligenceProfiles")
-      .withIndex("by_projectId", (q) => q.eq("projectId", project._id))
-      .first()
-    const runningBuild = await ctx.db
-      .query("projectIntelligenceBuilds")
-      .withIndex("by_projectId", (q) => q.eq("projectId", project._id))
-      .order("desc")
-      .take(10)
-      .then((builds) => builds.find((build) => build.status === "running"))
-
-    const redditAccounts = await ctx.db
-      .query("redditAccounts")
-      .withIndex("by_projectId", (q) => q.eq("projectId", project._id))
-      .take(20)
+    const [brand, runningBuild, redditAccounts] = await Promise.all([
+      ctx.db
+        .query("projectIntelligenceProfiles")
+        .withIndex("by_projectId", (q) => q.eq("projectId", project._id))
+        .first(),
+      ctx.db
+        .query("projectIntelligenceBuilds")
+        .withIndex("by_projectId", (q) => q.eq("projectId", project._id))
+        .order("desc")
+        .take(10)
+        .then((builds) => builds.find((build) => build.status === "running")),
+      ctx.db
+        .query("redditAccounts")
+        .withIndex("by_projectId", (q) => q.eq("projectId", project._id))
+        .take(20),
+    ])
     const limits = getPlanLimits(project.plan)
 
     return {

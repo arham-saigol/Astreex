@@ -104,11 +104,10 @@ export const getActiveCards = query({
     // Join with surfaced posts and reddit accounts
     const enrichedCards = await Promise.all(
       activeCards.map(async (card) => {
-        const surfacedPost = card.surfacedPostId
-          ? await ctx.db.get(card.surfacedPostId)
-          : null
-
-        const redditAccount = await ctx.db.get(card.redditAccountId)
+        const [surfacedPost, redditAccount] = await Promise.all([
+          card.surfacedPostId ? ctx.db.get(card.surfacedPostId) : Promise.resolve(null),
+          ctx.db.get(card.redditAccountId),
+        ])
 
         return {
           ...card,

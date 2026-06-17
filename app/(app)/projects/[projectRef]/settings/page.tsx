@@ -284,11 +284,13 @@ function FieldEditor({
   label,
   value,
   multiline,
+  disabled,
   onChange,
 }: {
   label: string
   value: string
   multiline?: boolean
+  disabled?: boolean
   onChange: (value: string) => void
 }) {
   return (
@@ -298,10 +300,11 @@ function FieldEditor({
         <textarea
           value={value}
           onChange={(event) => onChange(event.target.value)}
+          disabled={disabled}
           className="min-h-28 w-full rounded-lg border border-input bg-transparent px-2.5 py-2 text-[14px] text-text-primary outline-none transition-colors placeholder:text-text-tertiary focus:border-ring focus:ring-3 focus:ring-ring/50"
         />
       ) : (
-        <Input value={value} onChange={(event) => onChange(event.target.value)} />
+        <Input value={value} onChange={(event) => onChange(event.target.value)} disabled={disabled} />
       )}
     </label>
   )
@@ -313,6 +316,7 @@ function ProfileField({
   editing,
   arrayValue,
   multiline,
+  canEdit = true,
   onEdit,
   onChange,
 }: {
@@ -321,6 +325,7 @@ function ProfileField({
   editing: boolean
   arrayValue?: string[]
   multiline?: boolean
+  canEdit?: boolean
   onEdit: () => void
   onChange: (value: string) => void
 }) {
@@ -328,16 +333,18 @@ function ProfileField({
     <div className="group rounded-lg px-2 py-2 transition-colors hover:bg-muted/60">
       <div className="mb-1 flex items-center justify-between gap-3">
         <dt className="text-[13px] font-medium text-text-secondary">{label}</dt>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-xs"
-          onClick={onEdit}
-          aria-label={`Edit ${label}`}
-          className="opacity-0 group-hover:opacity-100 focus:opacity-100"
-        >
-          <Edit3 className="size-3.5" />
-        </Button>
+        {canEdit ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            onClick={onEdit}
+            aria-label={`Edit ${label}`}
+            className="opacity-0 group-hover:opacity-100 focus:opacity-100"
+          >
+            <Edit3 className="size-3.5" />
+          </Button>
+        ) : null}
       </div>
       <dd>
         {editing ? (
@@ -387,9 +394,10 @@ function AccountTab({
 
   const usedAccounts = context.redditAccounts.filter((account) => account.isActive).length
   const accountLimit = context.project.accountLimit
-  const canConnect = usedAccounts < accountLimit
+  const isOwner = context.project.role === "owner"
+  const canConnect = isOwner && usedAccounts < accountLimit
   const canDelete =
-    context.project.planStatus === "canceled" || !context.project.hasCreemCustomer
+    isOwner && (context.project.planStatus === "canceled" || !context.project.hasCreemCustomer)
 
   const handleSaveName = async () => {
     if (!name.trim() || name.trim() === displayName) return
@@ -406,7 +414,7 @@ function AccountTab({
   }
 
   const handleDisconnect = async () => {
-    if (!disconnecting) return
+    if (!disconnecting || !isOwner) return
 
     try {
       await disconnectRedditAccount({ redditAccountId: disconnecting._id })
@@ -418,6 +426,7 @@ function AccountTab({
   }
 
   const handleDeleteProject = async () => {
+    if (!isOwner) return
     setIsDeleting(true)
     try {
       const result = await deleteProject({
@@ -427,11 +436,12 @@ function AccountTab({
       if (result.status === "queued") {
         toast.success("Project deletion queued.")
         setDeleteOpen(false)
+        router.replace("/dashboard")
         return
       }
       toast.success("Project deleted.")
       setDeleteOpen(false)
-      router.replace("/onboarding")
+      router.replace("/dashboard")
     } catch (error) {
       toast.error(getErrorMessage(error))
     } finally {
@@ -488,20 +498,22 @@ function AccountTab({
             <p className="text-[13px] text-text-secondary">
               {usedAccounts} of {accountLimit} accounts used on {planLabel(context.project.plan)}.
             </p>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={!canConnect}
-              onClick={() =>
-                window.location.assign(
-                  `/api/zernio/reddit/connect?projectRef=${encodeURIComponent(context.project.projectRef)}&returnTo=settings`,
-                )
-              }
-            >
-              <Plus className="size-3.5" />
-              Connect another account
-            </Button>
+            {isOwner ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={!canConnect}
+                onClick={() =>
+                  window.location.assign(
+                    `/api/zernio/reddit/connect?projectRef=${encodeURIComponent(context.project.projectRef)}&returnTo=settings`,
+                  )
+                }
+              >
+                <Plus className="size-3.5" />
+                Connect another account
+              </Button>
+            ) : null}
           </div>
 
           {context.redditAccounts.length === 0 ? (
@@ -526,15 +538,17 @@ function AccountTab({
                       </p>
                     </div>
                   </div>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    className="justify-start text-error hover:text-error sm:justify-center"
-                    onClick={() => setDisconnecting(account)}
-                  >
-                    Disconnect
-                  </Button>
+                  {isOwner ? (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="justify-start text-error hover:text-error sm:justify-center"
+                      onClick={() => setDisconnecting(account)}
+                    >
+                      Disconnect
+                    </Button>
+                  ) : null}
                 </div>
               ))}
             </div>
@@ -542,24 +556,26 @@ function AccountTab({
         </div>
       </Section>
 
-      <Section title="Danger Zone" className="rounded-xl border border-error/30 p-5">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <p className="text-[14px] font-medium text-text-primary">Delete project</p>
-            <p className="mt-1 text-[13px] text-text-secondary">
-              Cancel the project plan before deleting project data.
-            </p>
+      {isOwner ? (
+        <Section title="Danger Zone" className="rounded-xl border border-error/30 p-5">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-[14px] font-medium text-text-primary">Delete project</p>
+              <p className="mt-1 text-[13px] text-text-secondary">
+                Cancel the project plan before deleting project data.
+              </p>
+            </div>
+            <Button
+              type="button"
+              variant="destructive"
+              onClick={() => setDeleteOpen(true)}
+            >
+              <Trash2 className="size-3.5" />
+              Delete project
+            </Button>
           </div>
-          <Button
-            type="button"
-            variant="destructive"
-            onClick={() => setDeleteOpen(true)}
-          >
-            <Trash2 className="size-3.5" />
-            Delete project
-          </Button>
-        </div>
-      </Section>
+        </Section>
+      ) : null}
 
       <Dialog open={!!disconnecting} onOpenChange={(open) => !open && setDisconnecting(null)}>
         <DialogContent>
@@ -643,6 +659,7 @@ function ProjectIntelligenceTab({
   const [retryingPipeline, setRetryingPipeline] = useState(false)
   const [reanalyzingIntelligence, setreanalyzingIntelligence] = useState(false)
   const [now, setNow] = useState(() => Date.now())
+  const canManageProject = context.project.role === "owner"
 
   useEffect(() => {
     const interval = window.setInterval(() => setNow(Date.now()), 60 * 1000)
@@ -691,6 +708,7 @@ function ProjectIntelligenceTab({
   }
 
   const saveProfile = async () => {
+    if (!canManageProject) return
     setSavingProfile(true)
     try {
       await updateProjectIntelligenceProfile({
@@ -707,6 +725,7 @@ function ProjectIntelligenceTab({
   }
 
   const saveUrls = async () => {
+    if (!canManageProject) return
     setSavingUrls(true)
     try {
       await updateProjectIntelligenceUrls({
@@ -723,6 +742,7 @@ function ProjectIntelligenceTab({
   }
 
   const retryPipeline = async () => {
+    if (!canManageProject) return
     setRetryingPipeline(true)
     try {
       await retryOnboardingPipeline({ projectId: context.project._id })
@@ -735,6 +755,7 @@ function ProjectIntelligenceTab({
   }
 
   const regenerateProjectIntelligenceProfile = async () => {
+    if (!canManageProject) return
     setreanalyzingIntelligence(true)
     try {
       await reanalyzeProjectIntelligenceProfile({ projectId: context.project._id })
@@ -754,7 +775,7 @@ function ProjectIntelligenceTab({
             ? "Something went wrong. Click to retry."
             : "Your Project Intelligence Profile is being generated. This usually takes a few minutes."}
         </p>
-        {profileIsLate ? (
+        {profileIsLate && canManageProject ? (
           <Button
             type="button"
             variant="outline"
@@ -779,16 +800,18 @@ function ProjectIntelligenceTab({
               <p>
                 Project intelligence analysis failed{context.project.onboardingError ? `: ${context.project.onboardingError}` : "."}
               </p>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={retryPipeline}
-                disabled={retryingPipeline}
-              >
-                <RefreshCw className="size-3.5" />
-                {retryingPipeline ? "Retrying..." : "Retry"}
-              </Button>
+              {canManageProject ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={retryPipeline}
+                  disabled={retryingPipeline}
+                >
+                  <RefreshCw className="size-3.5" />
+                  {retryingPipeline ? "Retrying..." : "Retry"}
+                </Button>
+              ) : null}
             </div>
           ) : null}
           {context.brand.scrapeStatus === "degraded" ? (
@@ -803,7 +826,7 @@ function ProjectIntelligenceTab({
                 : "Your Project Intelligence Profile is being generated. This usually takes a few minutes."}
             </p>
           ) : null}
-          {isEmptyProfile && profileIsLate ? (
+          {isEmptyProfile && profileIsLate && canManageProject ? (
             <Button
               type="button"
               variant="outline"
@@ -820,6 +843,7 @@ function ProjectIntelligenceTab({
               label="Overview"
               value={draft.overview}
               multiline
+              canEdit={canManageProject}
               editing={editingField === "overview"}
               onEdit={() => setEditingField("overview")}
               onChange={(value) => setTextField("overview", value)}
@@ -828,6 +852,7 @@ function ProjectIntelligenceTab({
               label="Capabilities"
               value={draft.capabilities.join(", ")}
               arrayValue={draft.capabilities}
+              canEdit={canManageProject}
               editing={editingField === "capabilities"}
               onEdit={() => setEditingField("capabilities")}
               onChange={(value) => setArrayField("capabilities", value)}
@@ -836,6 +861,7 @@ function ProjectIntelligenceTab({
               label="ICPs"
               value={draft.icps.join(", ")}
               arrayValue={draft.icps}
+              canEdit={canManageProject}
               editing={editingField === "icps"}
               onEdit={() => setEditingField("icps")}
               onChange={(value) => setArrayField("icps", value)}
@@ -844,6 +870,7 @@ function ProjectIntelligenceTab({
               label="Personas"
               value={draft.personas.join(", ")}
               arrayValue={draft.personas}
+              canEdit={canManageProject}
               editing={editingField === "personas"}
               onEdit={() => setEditingField("personas")}
               onChange={(value) => setArrayField("personas", value)}
@@ -852,6 +879,7 @@ function ProjectIntelligenceTab({
               label="Pain Points"
               value={draft.painPoints.join(", ")}
               arrayValue={draft.painPoints}
+              canEdit={canManageProject}
               editing={editingField === "painPoints"}
               onEdit={() => setEditingField("painPoints")}
               onChange={(value) => setArrayField("painPoints", value)}
@@ -860,6 +888,7 @@ function ProjectIntelligenceTab({
               label="Pricing & Comparisons"
               value={draft.pricingAndCompetitorComparisons.join(", ")}
               arrayValue={draft.pricingAndCompetitorComparisons}
+              canEdit={canManageProject}
               editing={editingField === "pricingAndCompetitorComparisons"}
               onEdit={() => setEditingField("pricingAndCompetitorComparisons")}
               onChange={(value) => setArrayField("pricingAndCompetitorComparisons", value)}
@@ -868,6 +897,7 @@ function ProjectIntelligenceTab({
               label="Project Leads"
               value={draft.whereProjectLeads.join(", ")}
               arrayValue={draft.whereProjectLeads}
+              canEdit={canManageProject}
               editing={editingField === "whereProjectLeads"}
               onEdit={() => setEditingField("whereProjectLeads")}
               onChange={(value) => setArrayField("whereProjectLeads", value)}
@@ -876,6 +906,7 @@ function ProjectIntelligenceTab({
               label="Competitors Lead"
               value={draft.whereCompetitorsLead.join(", ")}
               arrayValue={draft.whereCompetitorsLead}
+              canEdit={canManageProject}
               editing={editingField === "whereCompetitorsLead"}
               onEdit={() => setEditingField("whereCompetitorsLead")}
               onChange={(value) => setArrayField("whereCompetitorsLead", value)}
@@ -884,6 +915,7 @@ function ProjectIntelligenceTab({
               label="Weaknesses"
               value={draft.weaknesses.join(", ")}
               arrayValue={draft.weaknesses}
+              canEdit={canManageProject}
               editing={editingField === "weaknesses"}
               onEdit={() => setEditingField("weaknesses")}
               onChange={(value) => setArrayField("weaknesses", value)}
@@ -892,6 +924,7 @@ function ProjectIntelligenceTab({
               label="Future Advantages"
               value={draft.futureAdvantages.join(", ")}
               arrayValue={draft.futureAdvantages}
+              canEdit={canManageProject}
               editing={editingField === "futureAdvantages"}
               onEdit={() => setEditingField("futureAdvantages")}
               onChange={(value) => setArrayField("futureAdvantages", value)}
@@ -900,6 +933,7 @@ function ProjectIntelligenceTab({
               label="Positioning"
               value={draft.positioning}
               multiline
+              canEdit={canManageProject}
               editing={editingField === "positioning"}
               onEdit={() => setEditingField("positioning")}
               onChange={(value) => setTextField("positioning", value)}
@@ -908,6 +942,7 @@ function ProjectIntelligenceTab({
               label="Reddit Angles"
               value={draft.redditUsefulAngles.join(", ")}
               arrayValue={draft.redditUsefulAngles}
+              canEdit={canManageProject}
               editing={editingField === "redditUsefulAngles"}
               onEdit={() => setEditingField("redditUsefulAngles")}
               onChange={(value) => setArrayField("redditUsefulAngles", value)}
@@ -916,6 +951,7 @@ function ProjectIntelligenceTab({
               label="Avoid Topics"
               value={draft.avoidTopics.join(", ")}
               arrayValue={draft.avoidTopics}
+              canEdit={canManageProject}
               editing={editingField === "avoidTopics"}
               onEdit={() => setEditingField("avoidTopics")}
               onChange={(value) => setArrayField("avoidTopics", value)}
@@ -924,13 +960,14 @@ function ProjectIntelligenceTab({
               label="Agent Notes"
               value={draft.agentNotes.join(", ")}
               arrayValue={draft.agentNotes}
+              canEdit={canManageProject}
               editing={editingField === "agentNotes"}
               onEdit={() => setEditingField("agentNotes")}
               onChange={(value) => setArrayField("agentNotes", value)}
             />
           </dl>
 
-          {profileChanged ? (
+          {profileChanged && canManageProject ? (
             <div className="flex justify-end gap-2 border-t border-border pt-4">
               <Button
                 type="button"
@@ -952,7 +989,7 @@ function ProjectIntelligenceTab({
 
       <Section title="Website & Competitor">
         <div className="space-y-4 rounded-xl border border-border bg-surface p-5">
-          <FieldEditor label="Website URL" value={websiteUrl} onChange={setWebsiteUrl} />
+          <FieldEditor label="Website URL" value={websiteUrl} onChange={setWebsiteUrl} disabled={!canManageProject} />
           {websiteChanged ? (
             <p className="rounded-lg bg-accent-subtle p-3 text-[13px] text-accent">
               Updating your website will queue new project intelligence analysis.
@@ -973,46 +1010,53 @@ function ProjectIntelligenceTab({
                     value={url}
                     onChange={(event) => updateCompetitorUrl(index, event.target.value)}
                     placeholder="https://competitor.com"
+                    disabled={!canManageProject}
                   />
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    onClick={() => removeCompetitorUrl(index)}
-                    aria-label="Remove competitor"
-                  >
-                    <Trash2 className="size-3.5" />
-                  </Button>
+                  {canManageProject ? (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => removeCompetitorUrl(index)}
+                      aria-label="Remove competitor"
+                    >
+                      <Trash2 className="size-3.5" />
+                    </Button>
+                  ) : null}
                 </div>
               ))}
             </div>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => setCompetitorUrls((current) => [...current, ""])}
-              disabled={
-                competitorUrls.length >= context.project.limits.maxCompetitors
-              }
-            >
-              <Plus className="size-3.5" />
-              Add competitor
-            </Button>
+            {canManageProject ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setCompetitorUrls((current) => [...current, ""])}
+                disabled={
+                  competitorUrls.length >= context.project.limits.maxCompetitors
+                }
+              >
+                <Plus className="size-3.5" />
+                Add competitor
+              </Button>
+            ) : null}
           </div>
-          <div className="flex flex-col gap-2 sm:flex-row sm:justify-between">
-            <Button
-              type="button"
-              variant="outline"
-              onClick={regenerateProjectIntelligenceProfile}
-              disabled={reanalyzingIntelligence}
-            >
-              <RefreshCw className="size-3.5" />
-              {reanalyzingIntelligence ? "Regenerating..." : "Regenerate Project Intelligence Profile"}
-            </Button>
-            <Button type="button" onClick={saveUrls} disabled={!urlsChanged || savingUrls}>
-              {savingUrls ? "Saving..." : "Save URLs"}
-            </Button>
-          </div>
+          {canManageProject ? (
+            <div className="flex flex-col gap-2 sm:flex-row sm:justify-between">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={regenerateProjectIntelligenceProfile}
+                disabled={reanalyzingIntelligence}
+              >
+                <RefreshCw className="size-3.5" />
+                {reanalyzingIntelligence ? "Regenerating..." : "Regenerate Project Intelligence Profile"}
+              </Button>
+              <Button type="button" onClick={saveUrls} disabled={!urlsChanged || savingUrls}>
+                {savingUrls ? "Saving..." : "Save URLs"}
+              </Button>
+            </div>
+          ) : null}
         </div>
       </Section>
     </div>
@@ -1030,6 +1074,7 @@ function BillingTab({
   const billing = useQuery(api.billing.getProjectBillingStatus, { projectRef: context.project.projectRef })
   const currentPlan = plans.find((plan) => plan.id === context.project.plan) ?? plans[0]
   const currentIndex = plans.findIndex((plan) => plan.id === context.project.plan)
+  const isOwner = context.project.role === "owner"
   const trialEndsAt = context.project.trialEndsAt
   const daysRemaining =
     trialEndsAt === null ? 0 : Math.max(0, Math.ceil((trialEndsAt - now) / 86400000))
@@ -1041,6 +1086,7 @@ function BillingTab({
   const disabledAccounts = billing?.disabledCounts.redditAccounts ?? 0
 
   const openBilling = async () => {
+    if (!isOwner) return
     if (!hasPortalAccess) {
       setUpgradeOpen(true)
       return
@@ -1165,7 +1211,7 @@ function BillingTab({
                   type="button"
                   className="mt-4 w-full"
                   variant={isCurrent ? "secondary" : "outline"}
-                  disabled={isCurrent}
+                  disabled={isCurrent || !isOwner}
                   onClick={openBilling}
                 >
                   {isCurrent ? "Current plan" : hasPortalAccess ? `${action} in portal` : action}
@@ -1189,7 +1235,7 @@ function BillingTab({
               type="button"
               variant="outline"
               onClick={openBilling}
-              disabled={portalLoading}
+              disabled={portalLoading || !isOwner}
             >
               {portalLoading
                 ? "Opening..."
@@ -1232,14 +1278,15 @@ export default function SettingsPage() {
   const context = useQuery(api.settings.getSettingsContext, { projectRef })
 
   useEffect(() => {
+    const settingsPath = `/projects/${projectRef}/settings`
     if (searchParams.get("reddit_error")) {
       toast.error("Reddit connection failed. Please try again.")
-      router.replace("/settings", { scroll: false })
+      router.replace(settingsPath, { scroll: false })
     } else if (searchParams.get("reddit_connected")) {
       toast.success("Reddit account connected.")
-      router.replace("/settings", { scroll: false })
+      router.replace(settingsPath, { scroll: false })
     }
-  }, [router, searchParams])
+  }, [projectRef, router, searchParams])
 
   if (context === undefined) {
     return <SettingsSkeleton />

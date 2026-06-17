@@ -9,6 +9,7 @@ import {
   type CreemPlan,
 } from "@/lib/creemProducts"
 import { getAuthedConvexClient } from "../../convex-client"
+import { rateLimitCreem } from "../rateLimiter"
 
 export const runtime = "nodejs"
 
@@ -24,6 +25,9 @@ function isInterval(value: unknown): value is CreemBillingInterval {
 }
 
 export async function POST(request: NextRequest) {
+  const rateLimited = rateLimitCreem(request)
+  if (rateLimited) return rateLimited
+
   let body: unknown
   try {
     body = await request.json()

@@ -23,6 +23,7 @@ import { api } from "@/convex/_generated/api"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { TrialCard } from "@/components/trial-card"
+import { useProjectRefFromPath } from "@/hooks/use-project-ref-from-path"
 import { cn } from "@/lib/utils"
 
 const navItems = [
@@ -123,7 +124,7 @@ function ProfileMenu({ settingsHref }: { settingsHref: string }) {
 function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
   const pathname = usePathname()
   const data = useQuery(api.projects.listAccessibleProjects)
-  const projectRef = pathname.match(/^\/projects\/([^/]+)/)?.[1] ?? null
+  const projectRef = useProjectRefFromPath()
   const currentProject = data?.projects.find((project) => project.projectRef === projectRef)
   const projectBase = projectRef ? `/projects/${projectRef}` : null
 

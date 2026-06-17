@@ -1,21 +1,16 @@
 "use client"
 
 import { useState } from "react"
-import { usePathname } from "next/navigation"
 import { useQuery } from "convex/react"
 
 import { api } from "@/convex/_generated/api"
 import { Button } from "@/components/ui/button"
 import { UpgradeDialog } from "@/components/upgrade-dialog"
+import { useProjectRefFromPath } from "@/hooks/use-project-ref-from-path"
 
 function daysRemaining(trialEndsAt: number | null) {
   if (trialEndsAt === null) return 0
   return Math.max(0, Math.ceil((trialEndsAt - Date.now()) / 86_400_000))
-}
-
-function useProjectRefFromPath() {
-  const pathname = usePathname()
-  return pathname.match(/^\/projects\/([^/]+)/)?.[1] ?? null
 }
 
 export function TrialCard() {

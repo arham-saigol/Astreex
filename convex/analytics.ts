@@ -105,18 +105,20 @@ export const getDashboardMetrics = query({
     const { project } = await requireProjectAccessByRef(ctx, args.projectRef)
 
     const cutoff = cutoffForTimeframe(args.timeframe)
-    const postedContent = await getPostedContent(ctx, project._id, args.timeframe)
-    const reviewedCards = await ctx.db
-      .query("cards")
-      .withIndex("by_projectId_and_createdAt", (q) =>
-        q.eq("projectId", project._id).gte("createdAt", cutoff),
-      )
-      .order("desc")
-      .take(500)
-    const accounts = await ctx.db
-      .query("redditAccounts")
-      .withIndex("by_projectId", (q) => q.eq("projectId", project._id))
-      .take(50)
+    const [postedContent, reviewedCards, accounts] = await Promise.all([
+      getPostedContent(ctx, project._id, args.timeframe),
+      ctx.db
+        .query("cards")
+        .withIndex("by_projectId_and_createdAt", (q) =>
+          q.eq("projectId", project._id).gte("createdAt", cutoff),
+        )
+        .order("desc")
+        .take(500),
+      ctx.db
+        .query("redditAccounts")
+        .withIndex("by_projectId", (q) => q.eq("projectId", project._id))
+        .take(50),
+    ])
 
     const decidedCards = reviewedCards.filter(
       (card) => card.status !== "pending" && card.status !== "expired",
