@@ -3,7 +3,8 @@
 import { useState, useCallback } from "react"
 import { ArrowLeft, CheckCircle2, Plus } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import type { OnboardingData, Plan } from "./page"
+import { getPlanLimits } from "@/convex/lib/planLimits"
+import type { OnboardingData } from "./page"
 
 interface Props {
   data: OnboardingData
@@ -14,11 +15,6 @@ interface Props {
   error: string | null
 }
 
-const planSlots: Record<Plan, number> = {
-  starter: 1,
-  growth: 3,
-  scale: 5,
-}
 
 export function StepReddit({
   data,
@@ -29,7 +25,7 @@ export function StepReddit({
   error,
 }: Props) {
   const [isConnecting, setIsConnecting] = useState(false)
-  const maxSlots = planSlots[data.plan]
+  const maxSlots = getPlanLimits(data.plan).maxRedditAccounts
   const connectedAccounts = data.redditAccounts
   const hasAtLeastOne = connectedAccounts.length > 0
   const canAddMore = connectedAccounts.length < maxSlots

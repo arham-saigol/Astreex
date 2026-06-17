@@ -170,6 +170,7 @@ export async function POST(request: NextRequest) {
     })
   } catch (error) {
     console.error("Creem webhook handling failed", error)
+    return new NextResponse("Webhook handling failed", { status: 500 })
   }
 
   return Response.json({ received: true })

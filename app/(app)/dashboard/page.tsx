@@ -1,8 +1,8 @@
 "use client"
 
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import Link from "next/link"
-import { useAction, useQuery } from "convex/react"
+import { useQuery } from "convex/react"
 import {
   CartesianGrid,
   Line,
@@ -363,13 +363,8 @@ function BestPerformingList({
 
 export default function DashboardPage() {
   const [timeframe, setTimeframe] = useState<Timeframe | null>(null)
-  const [isRefreshing, setIsRefreshing] = useState(false)
-  const [refreshStartedAt, setRefreshStartedAt] = useState<number | null>(null)
-  const refreshProjectRef = useRef<string | null>(null)
-  const refreshTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const context = useQuery(api.analytics.getDashboardContext)
-  const refreshAnalytics = useAction(api.analytics.refreshAnalytics)
 
   const queryArgs = context && timeframe
     ? { projectId: context.projectId, timeframe }
@@ -392,63 +387,12 @@ export default function DashboardPage() {
     window.localStorage.setItem("astreex-dashboard-timeframe", timeframe)
   }, [timeframe])
 
-  useEffect(() => {
-    if (!context || refreshProjectRef.current === context.projectId) return
-
-    refreshProjectRef.current = context.projectId
-    setIsRefreshing(true)
-    setRefreshStartedAt(context.lastAnalyticsRefresh ?? 0)
-    if (refreshTimeoutRef.current) clearTimeout(refreshTimeoutRef.current)
-    refreshTimeoutRef.current = setTimeout(() => {
-      setIsRefreshing(false)
-      refreshTimeoutRef.current = null
-    }, 15_000)
-
-    refreshAnalytics({ projectId: context.projectId })
-      .then((result) => {
-        if (!result.refreshed) {
-          setIsRefreshing(false)
-          if (refreshTimeoutRef.current) {
-            clearTimeout(refreshTimeoutRef.current)
-            refreshTimeoutRef.current = null
-          }
-        }
-      })
-      .catch(() => {
-        setIsRefreshing(false)
-        if (refreshTimeoutRef.current) {
-          clearTimeout(refreshTimeoutRef.current)
-          refreshTimeoutRef.current = null
-        }
-      })
-
-    return () => {
-      if (refreshTimeoutRef.current) {
-        clearTimeout(refreshTimeoutRef.current)
-        refreshTimeoutRef.current = null
-      }
-    }
-  }, [context, refreshAnalytics])
-
   const hasGrowthAnalytics = useMemo(() => {
     const plan = context?.plan
     return plan === "growth" || plan === "scale"
   }, [context?.plan])
 
-  const refreshCompletedViaSubscription =
-    context?.lastAnalyticsRefresh !== null &&
-    refreshStartedAt !== null &&
-    context?.lastAnalyticsRefresh !== undefined &&
-    context.lastAnalyticsRefresh > refreshStartedAt
-  const showRefreshShimmer = isRefreshing && !refreshCompletedViaSubscription
-
-  useEffect(() => {
-    if (!refreshCompletedViaSubscription) return
-    if (refreshTimeoutRef.current) {
-      clearTimeout(refreshTimeoutRef.current)
-      refreshTimeoutRef.current = null
-    }
-  }, [refreshCompletedViaSubscription])
+  const showRefreshShimmer = false
 
   if (context === undefined || timeframe === null) {
     return <DashboardSkeleton />

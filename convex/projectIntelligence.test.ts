@@ -10,7 +10,7 @@ const modules = import.meta.glob("./**/*.ts")
 async function seedProfile(t: ReturnType<typeof convexTest>) {
   return await t.run(async (ctx) => {
     const userId = await ctx.db.insert("users", {
-      clerkId: "user_1",
+      tokenIdentifier: "test|user_1",
       email: "founder@example.com",
       createdAt: Date.now(),
     })

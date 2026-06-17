@@ -31,7 +31,7 @@ function badRequest(
 }
 
 export async function GET(request: NextRequest) {
-  const rateLimited = rateLimitZernioOAuth(request)
+  const rateLimited = await rateLimitZernioOAuth(request)
   if (rateLimited) return rateLimited
 
   const cookieProjectId = request.cookies.get(zernioCookieNames.projectId)?.value

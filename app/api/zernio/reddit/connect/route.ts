@@ -16,7 +16,7 @@ import {
 export const runtime = "nodejs"
 
 export async function GET(request: NextRequest) {
-  const rateLimited = rateLimitZernioOAuth(request)
+  const rateLimited = await rateLimitZernioOAuth(request)
   if (rateLimited) return rateLimited
 
   const returnTo = safeReturnTo(request.nextUrl.searchParams.get("returnTo"))

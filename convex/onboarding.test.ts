@@ -31,7 +31,7 @@ async function seedPipelineProject(
 ) {
   return await t.run(async (ctx) => {
     const userId = await ctx.db.insert("users", {
-      clerkId: "user_1",
+      tokenIdentifier: "test|user_1",
       email: "founder@example.com",
       createdAt: Date.now(),
     })
@@ -129,7 +129,7 @@ describe("onboarding pipeline helpers", () => {
   test("completeOnboarding enforces competitor URL plan limits", async () => {
     const t = convexTest(schema, modules)
     const authed = t.withIdentity({
-      subject: "user_1",
+      tokenIdentifier: "test|user_1",
       email: "founder@example.com",
     })
 
@@ -152,7 +152,7 @@ describe("onboarding pipeline helpers", () => {
   test("completeOnboarding accepts growth and scale competitor limits", async () => {
     const growth = convexTest(schema, modules)
     await growth.withIdentity({
-      subject: "user_growth",
+      tokenIdentifier: "test|user_growth",
       email: "growth@example.com",
     }).mutation(api.onboarding.prepareOnboardingProject, {
       projectName: "Growth",
@@ -164,7 +164,7 @@ describe("onboarding pipeline helpers", () => {
 
     const scale = convexTest(schema, modules)
     await scale.withIdentity({
-      subject: "user_scale",
+      tokenIdentifier: "test|user_scale",
       email: "scale@example.com",
     }).mutation(api.onboarding.prepareOnboardingProject, {
       projectName: "Scale",
@@ -179,7 +179,7 @@ describe("onboarding pipeline helpers", () => {
     const t = convexTest(schema, modules)
     await expect(
       t.withIdentity({
-        subject: "user_1",
+        tokenIdentifier: "test|user_1",
         email: "founder@example.com",
       }).mutation(api.onboarding.completeOnboarding, {
         projectName: "Astreex",
@@ -242,13 +242,97 @@ describe("onboarding pipeline helpers", () => {
     expect(state.project?.onboardingError).toBeUndefined()
   })
 
+  test("tokenIdentifier lookup works", async () => {
+    const t = convexTest(schema, modules)
+    await t.run(async (ctx) => {
+      const userId = await ctx.db.insert("users", {
+        tokenIdentifier: "https://issuer.example|canonical_user",
+        email: "founder@example.com",
+        createdAt: Date.now(),
+      })
+      await ctx.db.insert("projects", {
+        userId,
+        name: "Astreex",
+        plan: "growth",
+        planStatus: "active",
+        onboardingStatus: "complete",
+        timezone: "America/New_York",
+        lastActiveAt: Date.now(),
+        createdAt: Date.now(),
+      })
+    })
+
+    const status = await t.withIdentity({
+      tokenIdentifier: "https://issuer.example|canonical_user",
+    }).query(api.onboarding.getOnboardingStatus, {})
+
+    expect(status.hasCompletedOnboarding).toBe(true)
+  })
+
+  test("completeOnboarding rejects zero active Reddit accounts", async () => {
+    const t = convexTest(schema, modules)
+    await expect(
+      t.withIdentity({
+        tokenIdentifier: "test|user_1",
+        email: "founder@example.com",
+      }).mutation(api.onboarding.completeOnboarding, {
+        projectName: "Astreex",
+        websiteUrl: "https://astreex.example",
+        plan: "growth",
+        timezone: "America/New_York",
+      }),
+    ).rejects.toThrow("Connect at least one Reddit account to continue")
+  })
+
+  test("prepareOnboardingProject validates and stores timezone", async () => {
+    const t = convexTest(schema, modules)
+    const authed = t.withIdentity({
+      tokenIdentifier: "test|user_1",
+      email: "founder@example.com",
+    })
+
+    await expect(authed.mutation(api.onboarding.prepareOnboardingProject, {
+      projectName: "Astreex",
+      websiteUrl: "https://astreex.example",
+      plan: "growth",
+      timezone: "Mars/Base",
+    })).rejects.toThrow("Invalid timezone")
+
+    const result = await authed.mutation(api.onboarding.prepareOnboardingProject, {
+      projectName: "Astreex",
+      websiteUrl: "https://astreex.example",
+      plan: "growth",
+      timezone: " America/New_York ",
+    })
+    const project = await t.run(async (ctx) => await ctx.db.get(result.projectId))
+    expect(project?.timezone).toBe("America/New_York")
+  })
+
   test("completeOnboarding schedules the backend pipeline", async () => {
     const t = convexTest(schema, modules)
-
-    const result = await t.withIdentity({
-      subject: "user_1",
+    const authed = t.withIdentity({
+      tokenIdentifier: "test|user_1",
       email: "founder@example.com",
-    }).mutation(api.onboarding.completeOnboarding, {
+    })
+
+    const draft = await authed.mutation(api.onboarding.prepareOnboardingProject, {
+      projectName: "Astreex",
+      websiteUrl: "https://astreex.example",
+      plan: "growth",
+      timezone: "America/New_York",
+    })
+    await t.run(async (ctx) => {
+      await ctx.db.insert("redditAccounts", {
+        projectId: draft.projectId as Id<"projects">,
+        redditUsername: "founder",
+        zernioAccountId: "acct_1",
+        isActive: true,
+        healthStatus: "healthy",
+        createdAt: Date.now(),
+      })
+    })
+
+    const result = await authed.mutation(api.onboarding.completeOnboarding, {
       projectName: "Astreex",
       websiteUrl: "https://astreex.example",
       plan: "growth",
@@ -267,7 +351,7 @@ describe("onboarding pipeline helpers", () => {
   test("completeOnboarding validates URL protocol and length", async () => {
     const t = convexTest(schema, modules)
     const authed = t.withIdentity({
-      subject: "user_1",
+      tokenIdentifier: "test|user_1",
       email: "founder@example.com",
     })
 

@@ -36,7 +36,7 @@ async function seedBillingProject(
 ) {
   return await t.run(async (ctx) => {
     const userId = await ctx.db.insert("users", {
-      clerkId: "user_1",
+      tokenIdentifier: "test|user_1",
       email: "founder@example.com",
       createdAt: Date.now(),
     })
@@ -290,7 +290,7 @@ describe("starter enforcement", () => {
     })
 
     await expect(
-      t.withIdentity({ subject: "user_1" }).action(api.subreddits.addSubreddit, {
+      t.withIdentity({ tokenIdentifier: "test|user_1" }).action(api.subreddits.addSubreddit, {
         name: "targetsub",
       }),
     ).rejects.toThrow("DUPLICATE")
@@ -306,7 +306,7 @@ describe("starter enforcement", () => {
     await seedActiveSubreddits(t, projectId, 5)
 
     await expect(
-      t.withIdentity({ subject: "user_1" }).action(api.subreddits.addSubreddit, {
+      t.withIdentity({ tokenIdentifier: "test|user_1" }).action(api.subreddits.addSubreddit, {
         name: "founders",
       }),
     ).rejects.toThrow(
@@ -323,7 +323,7 @@ describe("starter enforcement", () => {
     })
     await seedActiveAccounts(t, projectId, 1)
 
-    const context = await t.withIdentity({ subject: "user_1" }).query(
+    const context = await t.withIdentity({ tokenIdentifier: "test|user_1" }).query(
       api.reddit.getConnectContext,
       { projectId },
     )

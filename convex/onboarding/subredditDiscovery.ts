@@ -447,6 +447,45 @@ export function selectSubredditsDeterministically(
   ]
 }
 
+export const scoreManualSubreddit = internalAction({
+  args: {
+    projectId: v.id("projects"),
+    name: v.string(),
+  },
+  handler: async (ctx, args): Promise<{
+    name: string
+    memberCount?: number
+    description?: string
+    rulesJson?: string
+    relevanceScore: number
+    reasoning: string
+  }> => {
+    const profile = await ctx.runQuery(
+      internal.onboarding.data.loadProjectIntelligenceProfile,
+      { projectId: args.projectId },
+    )
+    if (!profile || profile.intelligenceJson.trim() === "{}") {
+      throw new Error("Project intelligence profile is missing")
+    }
+
+    const scored = await enrichAndScoreSubreddit(ctx, {
+      name: args.name,
+      rail: "A",
+      reason: "Manually added by user.",
+    }, profile.intelligenceJson)
+    if (!scored) throw new Error("INVALID_SUBREDDIT_NAME")
+
+    return {
+      name: scored.name,
+      memberCount: scored.memberCount,
+      description: scored.description,
+      rulesJson: scored.rulesJson,
+      relevanceScore: scored.relevanceScore,
+      reasoning: scored.reasoning,
+    }
+  },
+})
+
 export const discoverSubreddits = internalAction({
   args: {
     projectId: v.id("projects"),

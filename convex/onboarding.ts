@@ -2,7 +2,9 @@ import { v } from "convex/values"
 import { internal } from "./_generated/api"
 import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server"
 import type { Doc, Id } from "./_generated/dataModel"
+import { getOrCreateCurrentUser, getCurrentUserOrNull } from "./lib/auth"
 import { getPlanLimits } from "./lib/planLimits"
+import { assertValidTimezone } from "./lib/timezones"
 import { normalizeHttpUrl, normalizeOptionalHttpUrls } from "./lib/urls"
 
 type Plan = "starter" | "growth" | "scale"
@@ -14,38 +16,11 @@ const planValidator = v.union(
 )
 
 async function getOrCreateUser(ctx: MutationCtx) {
-  const identity = await ctx.auth.getUserIdentity()
-  if (!identity) {
-    throw new Error("Not authenticated")
-  }
-
-  let user = await ctx.db
-    .query("users")
-    .withIndex("by_clerkId", (q) => q.eq("clerkId", identity.subject))
-    .unique()
-
-  if (!user) {
-    const userId = await ctx.db.insert("users", {
-      clerkId: identity.subject,
-      email: identity.email ?? "",
-      name: identity.name,
-      avatarUrl: identity.pictureUrl,
-      createdAt: Date.now(),
-    })
-    user = (await ctx.db.get(userId))!
-  }
-
-  return user
+  return await getOrCreateCurrentUser(ctx)
 }
 
 async function getCurrentUser(ctx: QueryCtx) {
-  const identity = await ctx.auth.getUserIdentity()
-  if (!identity) return null
-
-  return await ctx.db
-    .query("users")
-    .withIndex("by_clerkId", (q) => q.eq("clerkId", identity.subject))
-    .unique()
+  return await getCurrentUserOrNull(ctx)
 }
 
 async function getUserProjects(ctx: QueryCtx | MutationCtx, userId: Id<"users">) {
@@ -74,6 +49,7 @@ type PrepareProjectArgs = {
 async function prepareProject(ctx: MutationCtx, args: PrepareProjectArgs) {
   const user = await getOrCreateUser(ctx)
   const projectName = args.projectName.trim()
+  const timezone = assertValidTimezone(args.timezone)
   const websiteUrl = normalizeHttpUrl(args.websiteUrl, "Website URL")
   const competitorUrls = normalizeOptionalHttpUrls(
     args.competitorUrls,
@@ -111,7 +87,7 @@ async function prepareProject(ctx: MutationCtx, args: PrepareProjectArgs) {
       plan: args.plan,
       planStatus: "trialing",
       onboardingStatus: "in_progress",
-      timezone: args.timezone,
+      timezone,
       lastActiveAt: now,
       createdAt: now,
     })
@@ -131,7 +107,7 @@ async function prepareProject(ctx: MutationCtx, args: PrepareProjectArgs) {
   await ctx.db.patch(project._id, {
     name: projectName,
     plan: args.plan,
-    timezone: args.timezone,
+    timezone,
     lastActiveAt: now,
   })
 
@@ -250,9 +226,13 @@ export const completeOnboarding = mutation({
     const redditAccounts = await ctx.db
       .query("redditAccounts")
       .withIndex("by_projectId", (q) => q.eq("projectId", projectId))
-      .take(accountLimit + 1)
+      .take(100)
+    const activeRedditAccounts = redditAccounts.filter((account) => account.isActive)
 
-    if (redditAccounts.length > accountLimit) {
+    if (activeRedditAccounts.length === 0) {
+      throw new Error("Connect at least one Reddit account to continue")
+    }
+    if (activeRedditAccounts.length > accountLimit) {
       throw new Error("Too many Reddit accounts for the selected plan")
     }
 
