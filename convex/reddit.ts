@@ -11,6 +11,7 @@ import {
   type QueryCtx,
 } from "./_generated/server"
 import type { Doc, Id } from "./_generated/dataModel"
+import { getCurrentUserOrNull, requireOwnedProject } from "./lib/auth"
 import { getPlanLimits } from "./lib/planLimits"
 import {
   REDDIT_WARMUP_ACCOUNT_AGE_DAYS,
@@ -40,31 +41,59 @@ const healthStatusValidator = v.union(
   v.literal("banned"),
 )
 
-async function getCurrentUser(ctx: QueryCtx | MutationCtx) {
-  const identity = await ctx.auth.getUserIdentity()
-  if (!identity) throw new Error("Not authenticated")
+const OAUTH_RATE_LIMIT_WINDOW_MS = 60_000
+const OAUTH_RATE_LIMIT_MAX_REQUESTS = 20
 
-  const user = await ctx.db
-    .query("users")
-    .withIndex("by_clerkId", (q) => q.eq("clerkId", identity.subject))
-    .unique()
-  if (!user) throw new Error("User not found")
+export const consumeZernioOAuthRateLimit = internalMutation({
+  args: {
+    key: v.string(),
+  },
+  handler: async (ctx, args) => {
+    if (args.key.length === 0 || args.key.length > 256) {
+      throw new Error("Invalid rate limit key")
+    }
 
-  return user
-}
+    const now = Date.now()
+    const existing = await ctx.db
+      .query("oauthRateLimitBuckets")
+      .withIndex("by_key", (q) => q.eq("key", args.key))
+      .unique()
+
+    if (!existing) {
+      await ctx.db.insert("oauthRateLimitBuckets", {
+        key: args.key,
+        count: 1,
+        resetAt: now + OAUTH_RATE_LIMIT_WINDOW_MS,
+        updatedAt: now,
+      })
+      return { allowed: true, retryAfter: 0 }
+    }
+
+    if (existing.resetAt <= now) {
+      await ctx.db.patch(existing._id, {
+        count: 1,
+        resetAt: now + OAUTH_RATE_LIMIT_WINDOW_MS,
+        updatedAt: now,
+      })
+      return { allowed: true, retryAfter: 0 }
+    }
+
+    const count = existing.count + 1
+    await ctx.db.patch(existing._id, {
+      count,
+      updatedAt: now,
+    })
+
+    const retryAfter = Math.max(1, Math.ceil((existing.resetAt - now) / 1000))
+    return { allowed: count <= OAUTH_RATE_LIMIT_MAX_REQUESTS, retryAfter }
+  },
+})
 
 async function getOwnedProject(
   ctx: QueryCtx | MutationCtx,
   projectId: Id<"projects">,
 ) {
-  const user = await getCurrentUser(ctx)
-  const project = await ctx.db.get(projectId)
-
-  if (!project || project.userId !== user._id) {
-    throw new Error("Not authorized")
-  }
-
-  return project
+  return await requireOwnedProject(ctx, projectId)
 }
 
 function validateRedditUsername(username: string) {
@@ -442,13 +471,7 @@ export const updateProviderHealth = internalMutation({
 export const getWarmupStatus = query({
   args: {},
   handler: async (ctx) => {
-    const identity = await ctx.auth.getUserIdentity()
-    if (!identity) return null
-
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_clerkId", (q) => q.eq("clerkId", identity.subject))
-      .unique()
+    const user = await getCurrentUserOrNull(ctx)
     if (!user) return null
 
     const project = await ctx.db

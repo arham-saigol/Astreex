@@ -7,6 +7,7 @@ import {
   type QueryCtx,
 } from "./_generated/server"
 import type { Doc, Id } from "./_generated/dataModel"
+import { requireAuthenticatedUser, requireOwnedProject } from "./lib/auth"
 import { getPlanLimits } from "./lib/planLimits"
 import { reconcileProjectIntelligenceUrls } from "./lib/projectIntelligenceReconciliation"
 
@@ -26,16 +27,7 @@ type Plan = "starter" | "growth" | "scale"
 type BillingInterval = "monthly" | "annual"
 
 async function getCurrentUser(ctx: QueryCtx | MutationCtx) {
-  const identity = await ctx.auth.getUserIdentity()
-  if (!identity) throw new Error("Not authenticated")
-
-  const user = await ctx.db
-    .query("users")
-    .withIndex("by_clerkId", (q) => q.eq("clerkId", identity.subject))
-    .unique()
-  if (!user) throw new Error("User not found")
-
-  return user
+  return await requireAuthenticatedUser(ctx)
 }
 
 async function getCurrentProject(ctx: QueryCtx) {
@@ -47,17 +39,10 @@ async function getCurrentProject(ctx: QueryCtx) {
 }
 
 async function getOwnedProject(
-  ctx: QueryCtx,
+  ctx: QueryCtx | MutationCtx,
   projectId: Id<"projects">,
 ) {
-  const user = await getCurrentUser(ctx)
-  const project = await ctx.db.get(projectId)
-
-  if (!project || project.userId !== user._id) {
-    throw new Error("Not authorized")
-  }
-
-  return project
+  return await requireOwnedProject(ctx, projectId)
 }
 
 async function projectUsage(ctx: QueryCtx | MutationCtx, projectId: Id<"projects">) {

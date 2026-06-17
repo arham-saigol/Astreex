@@ -64,12 +64,12 @@ const contentVisibility = v.union(
 
 export default defineSchema({
   users: defineTable({
-    clerkId: v.string(),
+    tokenIdentifier: v.string(),
     email: v.string(),
     name: v.optional(v.string()),
     avatarUrl: v.optional(v.string()),
     createdAt: v.number(),
-  }).index("by_clerkId", ["clerkId"]),
+  }).index("by_tokenIdentifier", ["tokenIdentifier"]),
 
   projects: defineTable({
     userId: v.id("users"),
@@ -358,6 +358,15 @@ export default defineSchema({
     requestedAt: v.number(),
     createdAt: v.number(),
   }).index("by_provider_and_requestedAt", ["provider", "requestedAt"]),
+
+  oauthRateLimitBuckets: defineTable({
+    key: v.string(),
+    count: v.number(),
+    resetAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_key", ["key"])
+    .index("by_resetAt", ["resetAt"]),
 
   pipelineRuns: defineTable({
     projectId: v.id("projects"),

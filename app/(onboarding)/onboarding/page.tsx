@@ -19,7 +19,7 @@ export interface OnboardingData {
   websiteUrl: string
   competitorUrls: string[]
   plan: Plan
-  redditAccounts: { username: string }[]
+  redditAccounts: { username: string; isActive: boolean }[]
   timezone: string
   projectId: Id<"projects"> | null
 }

@@ -64,7 +64,7 @@ beforeEach(() => {
 async function seedProject(t: ReturnType<typeof convexTest>) {
   return await t.run(async (ctx) => {
     const userId = await ctx.db.insert("users", {
-      clerkId: "user_1",
+      tokenIdentifier: "test|user_1",
       email: "founder@example.com",
       createdAt: Date.now(),
     })
@@ -1244,7 +1244,7 @@ describe("posting scheduler", () => {
     const redditAccountId = await seedRedditAccount(t, projectId)
     const cardId = await seedPendingCard(t, projectId, redditAccountId)
 
-    await t.withIdentity({ subject: "user_1" }).mutation(api.cards.approveCard, {
+    await t.withIdentity({ tokenIdentifier: "test|user_1" }).mutation(api.cards.approveCard, {
       cardId,
       editedContent: "Edited title\nEdited body",
     })
@@ -1281,7 +1281,7 @@ describe("posting scheduler", () => {
       cardIds.push(await seedPendingCard(t, projectId, redditAccountId, today + index))
     }
 
-    await t.withIdentity({ subject: "user_1" }).mutation(api.cards.approveCard, {
+    await t.withIdentity({ tokenIdentifier: "test|user_1" }).mutation(api.cards.approveCard, {
       cardId: cardIds[0],
     })
 
@@ -1304,7 +1304,7 @@ describe("posting scheduler", () => {
     const firstCardId = await seedPendingCard(t, projectId, redditAccountId)
     const secondCardId = await seedPendingCard(t, projectId, redditAccountId)
 
-    const authed = t.withIdentity({ subject: "user_1" })
+    const authed = t.withIdentity({ tokenIdentifier: "test|user_1" })
     await authed.mutation(api.cards.approveCard, { cardId: firstCardId })
     await authed.mutation(api.cards.approveCard, { cardId: secondCardId })
 
@@ -1339,7 +1339,7 @@ describe("posting scheduler", () => {
       cardIds.push(await seedPendingCard(t, projectId, redditAccountId))
     }
 
-    const authed = t.withIdentity({ subject: "user_1" })
+    const authed = t.withIdentity({ tokenIdentifier: "test|user_1" })
     for (const cardId of cardIds) {
       await authed.mutation(api.cards.approveCard, { cardId })
     }
@@ -1367,7 +1367,7 @@ describe("posting scheduler", () => {
     const { projectId } = await seedProject(t)
     const redditAccountId = await seedRedditAccount(t, projectId)
     const cardId = await seedPendingCard(t, projectId, redditAccountId)
-    const authed = t.withIdentity({ subject: "user_1" })
+    const authed = t.withIdentity({ tokenIdentifier: "test|user_1" })
 
     await authed.mutation(api.cards.approveCard, { cardId })
     await expect(
@@ -1386,7 +1386,7 @@ describe("posting scheduler", () => {
     const { projectId } = await seedProject(t)
     const redditAccountId = await seedRedditAccount(t, projectId)
     const cardId = await seedPendingCard(t, projectId, redditAccountId)
-    const authed = t.withIdentity({ subject: "user_1" })
+    const authed = t.withIdentity({ tokenIdentifier: "test|user_1" })
 
     await authed.mutation(api.cards.declineCard, { cardId })
     await expect(
@@ -1399,7 +1399,7 @@ describe("poster helpers", () => {
   test("saveZernioProfileId returns existing profile without overwriting it", async () => {
     const t = convexTest(schema, modules)
     const { projectId } = await seedProject(t)
-    const authed = t.withIdentity({ subject: "user_1" })
+    const authed = t.withIdentity({ tokenIdentifier: "test|user_1" })
 
     const first = await authed.mutation(internal.reddit.saveZernioProfileId, {
       projectId,

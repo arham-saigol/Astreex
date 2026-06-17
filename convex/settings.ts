@@ -8,6 +8,7 @@ import {
 } from "./_generated/server"
 import { internal } from "./_generated/api"
 import type { Id } from "./_generated/dataModel"
+import { requireAuthenticatedUser, requireOwnedProject } from "./lib/auth"
 import { getPlanLimits } from "./lib/planLimits"
 import { reconcileProjectIntelligenceUrls } from "./lib/projectIntelligenceReconciliation"
 import { normalizeHttpUrl, normalizeOptionalHttpUrls } from "./lib/urls"
@@ -55,30 +56,14 @@ function validateProjectIntelligenceJson(value: string) {
 }
 
 async function getCurrentUser(ctx: QueryCtx | MutationCtx) {
-  const identity = await ctx.auth.getUserIdentity()
-  if (!identity) throw new Error("Not authenticated")
-
-  const user = await ctx.db
-    .query("users")
-    .withIndex("by_clerkId", (q) => q.eq("clerkId", identity.subject))
-    .unique()
-  if (!user) throw new Error("User not found")
-
-  return user
+  return await requireAuthenticatedUser(ctx)
 }
 
 async function getOwnedProject(
   ctx: QueryCtx | MutationCtx,
   projectId: Id<"projects">,
 ) {
-  const user = await getCurrentUser(ctx)
-  const project = await ctx.db.get(projectId)
-
-  if (!project || project.userId !== user._id) {
-    throw new Error("Not authorized")
-  }
-
-  return project
+  return await requireOwnedProject(ctx, projectId)
 }
 
 async function getCurrentProject(ctx: QueryCtx) {

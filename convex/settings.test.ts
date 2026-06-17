@@ -33,7 +33,7 @@ async function seedSettingsProject(
 ) {
   return await t.run(async (ctx) => {
     const userId = await ctx.db.insert("users", {
-      clerkId: "user_1",
+      tokenIdentifier: "test|user_1",
       email: "founder@example.com",
       createdAt: Date.now(),
     })
@@ -67,7 +67,7 @@ describe("settings mutations", () => {
     const { projectId } = await seedSettingsProject(t, { plan: "starter" })
 
     await expect(
-      t.withIdentity({ subject: "user_1" }).mutation(api.settings.updateProjectIntelligenceUrls, {
+      t.withIdentity({ tokenIdentifier: "test|user_1" }).mutation(api.settings.updateProjectIntelligenceUrls, {
         projectId,
         websiteUrl: "https://astreex.example",
         competitorUrls: [
@@ -101,7 +101,7 @@ describe("settings mutations", () => {
       })
     })
 
-    await t.withIdentity({ subject: "user_1" }).mutation(
+    await t.withIdentity({ tokenIdentifier: "test|user_1" }).mutation(
       api.settings.updateProjectIntelligenceUrls,
       {
         projectId,
@@ -125,7 +125,7 @@ describe("settings mutations", () => {
     const t = convexTest(schema, modules)
     const { projectId, brandId } = await seedSettingsProject(t)
 
-    const result = await t.withIdentity({ subject: "user_1" }).mutation(
+    const result = await t.withIdentity({ tokenIdentifier: "test|user_1" }).mutation(
       api.settings.reanalyzeProjectIntelligenceProfile,
       { projectId },
     )
@@ -149,7 +149,7 @@ describe("settings mutations", () => {
       planStatus: "active",
     })
 
-    const result = await t.withIdentity({ subject: "user_1" }).mutation(
+    const result = await t.withIdentity({ tokenIdentifier: "test|user_1" }).mutation(
       api.settings.deleteProject,
       { projectId, confirmation: "DELETE PROJECT" },
     )
@@ -190,7 +190,7 @@ describe("settings mutations", () => {
       }
     })
 
-    const result = await t.withIdentity({ subject: "user_1" }).mutation(
+    const result = await t.withIdentity({ tokenIdentifier: "test|user_1" }).mutation(
       api.settings.deleteProject,
       { projectId, confirmation: "DELETE PROJECT" },
     )
@@ -217,7 +217,7 @@ describe("project migrations", () => {
     const t = convexTest(schema, modules)
     const { projectId } = await t.run(async (ctx) => {
       const userId = await ctx.db.insert("users", {
-        clerkId: "user_1",
+        tokenIdentifier: "test|user_1",
         email: "founder@example.com",
         createdAt: Date.now(),
       })

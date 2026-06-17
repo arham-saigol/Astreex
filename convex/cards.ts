@@ -2,6 +2,7 @@ import { v } from "convex/values"
 import { internal } from "./_generated/api"
 import type { Id } from "./_generated/dataModel"
 import { internalMutation, mutation, query, type MutationCtx } from "./_generated/server"
+import { getCurrentUserOrNull, requireAuthenticatedUser } from "./lib/auth"
 
 const FIVE_MINUTES_MS = 5 * 60 * 1000
 
@@ -76,13 +77,7 @@ async function findScheduledSpacingConflicts(
 export const getActiveCards = query({
   args: {},
   handler: async (ctx) => {
-    const identity = await ctx.auth.getUserIdentity()
-    if (!identity) return []
-
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_clerkId", (q) => q.eq("clerkId", identity.subject))
-      .unique()
+    const user = await getCurrentUserOrNull(ctx)
     if (!user) return []
 
     const project = await ctx.db
@@ -144,13 +139,7 @@ export const getActiveCards = query({
 export const getFeedStatus = query({
   args: {},
   handler: async (ctx) => {
-    const identity = await ctx.auth.getUserIdentity()
-    if (!identity) return null
-
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_clerkId", (q) => q.eq("clerkId", identity.subject))
-      .unique()
+    const user = await getCurrentUserOrNull(ctx)
     if (!user) return null
 
     const project = await ctx.db
@@ -180,18 +169,10 @@ export const approveCard = mutation({
     editedContent: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity()
-    if (!identity) throw new Error("Not authenticated")
+    const user = await requireAuthenticatedUser(ctx)
 
     const card = await ctx.db.get(args.cardId)
     if (!card) throw new Error("Card not found")
-
-    // Verify ownership
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_clerkId", (q) => q.eq("clerkId", identity.subject))
-      .unique()
-    if (!user) throw new Error("User not found")
 
     const project = await ctx.db.get(card.projectId)
     if (!project || project.userId !== user._id) {
@@ -259,18 +240,10 @@ export const declineCard = mutation({
     cardId: v.id("cards"),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity()
-    if (!identity) throw new Error("Not authenticated")
+    const user = await requireAuthenticatedUser(ctx)
 
     const card = await ctx.db.get(args.cardId)
     if (!card) throw new Error("Card not found")
-
-    // Verify ownership
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_clerkId", (q) => q.eq("clerkId", identity.subject))
-      .unique()
-    if (!user) throw new Error("User not found")
 
     const project = await ctx.db.get(card.projectId)
     if (!project || project.userId !== user._id) {

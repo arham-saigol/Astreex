@@ -8,9 +8,9 @@ import {
   query,
 } from "./_generated/server"
 import { getPlanLimits } from "./lib/planLimits"
-import { communityDetails, communityFromDetails } from "./lib/fetchLayer"
 import { validateSubreddit } from "./lib/zernio"
-import { stringifyRulesJson } from "./lib/rules"
+import type { Id } from "./_generated/dataModel"
+import { getCurrentProjectOrNull, requireAuthenticatedUser } from "./lib/auth"
 
 const SUBREDDIT_LIMIT_ERROR =
   "You've reached the subreddit limit for your plan. Upgrade to add more."
@@ -18,20 +18,10 @@ const SUBREDDIT_LIMIT_ERROR =
 export const getSubreddits = query({
   args: {},
   handler: async (ctx) => {
-    const identity = await ctx.auth.getUserIdentity()
-    if (!identity) return []
+    const current = await getCurrentProjectOrNull(ctx)
+    if (!current) return []
 
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_clerkId", (q) => q.eq("clerkId", identity.subject))
-      .unique()
-    if (!user) return []
-
-    const project = await ctx.db
-      .query("projects")
-      .withIndex("by_userId", (q) => q.eq("userId", user._id))
-      .first()
-    if (!project) return []
+    const { project } = current
 
     const subreddits = await ctx.db
       .query("subreddits")
@@ -97,20 +87,10 @@ export const getSubreddits = query({
 export const getRadarStatus = query({
   args: {},
   handler: async (ctx) => {
-    const identity = await ctx.auth.getUserIdentity()
-    if (!identity) return null
+    const current = await getCurrentProjectOrNull(ctx)
+    if (!current) return null
 
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_clerkId", (q) => q.eq("clerkId", identity.subject))
-      .unique()
-    if (!user) return null
-
-    const project = await ctx.db
-      .query("projects")
-      .withIndex("by_userId", (q) => q.eq("userId", user._id))
-      .first()
-    if (!project) return null
+    const { project } = current
 
     return {
       onboardingStatus: project.onboardingStatus ?? null,
@@ -126,18 +106,10 @@ export const toggleSubreddit = mutation({
     active: v.boolean(),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity()
-    if (!identity) throw new Error("Not authenticated")
+    const user = await requireAuthenticatedUser(ctx)
 
     const subreddit = await ctx.db.get(args.subredditId)
     if (!subreddit) throw new Error("Subreddit not found")
-
-    // Verify ownership
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_clerkId", (q) => q.eq("clerkId", identity.subject))
-      .unique()
-    if (!user) throw new Error("User not found")
 
     const project = await ctx.db
       .query("projects")
@@ -202,21 +174,10 @@ export const loadManualAddContext = internalQuery({
     name: v.string(),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity()
-    if (!identity) throw new Error("Not authenticated")
+    const current = await getCurrentProjectOrNull(ctx)
+    if (!current) throw new Error("No project found")
 
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_clerkId", (q) => q.eq("clerkId", identity.subject))
-      .unique()
-    if (!user) throw new Error("User not found")
-
-    const project = await ctx.db
-      .query("projects")
-      .withIndex("by_userId", (q) => q.eq("userId", user._id))
-      .first()
-    if (!project) throw new Error("No project found")
-
+    const { project } = current
     const cleanName = normalizeSubredditName(args.name)
 
     // Check for duplicate
@@ -240,7 +201,6 @@ export const loadManualAddContext = internalQuery({
       throw new Error(SUBREDDIT_LIMIT_ERROR)
     }
 
-    // Hardcoded scoring for now — will be replaced by AI agent
     return { projectId: project._id, cleanName }
   },
 })
@@ -252,6 +212,8 @@ export const insertManualSubreddit = internalMutation({
     memberCount: v.optional(v.number()),
     description: v.optional(v.string()),
     rulesJson: v.optional(v.string()),
+    relevanceScore: v.number(),
+    reasoning: v.string(),
   },
   handler: async (ctx, args) => {
     const project = await ctx.db.get(args.projectId)
@@ -279,15 +241,14 @@ export const insertManualSubreddit = internalMutation({
       throw new Error(SUBREDDIT_LIMIT_ERROR)
     }
 
-    const relevanceScore = 75
-    const reasoning = args.description
-      ? `Added by user. r/${cleanName}: ${args.description.slice(0, 180)}`
-      : "Added by user"
+    const relevanceScore = Math.round(args.relevanceScore)
+    const reasoning = args.reasoning.trim()
 
     // Quality gate
     if (relevanceScore < 20) {
       throw new Error(`QUALITY_GATE:${relevanceScore}`)
     }
+    if (!reasoning) throw new Error("Scoring reasoning is required")
 
     const id = await ctx.db.insert("subreddits", {
       projectId: project._id,
@@ -302,7 +263,7 @@ export const insertManualSubreddit = internalMutation({
       createdAt: Date.now(),
     })
 
-    return { id, relevanceScore, name: cleanName }
+    return { id, relevanceScore, reasoning, name: cleanName }
   },
 })
 
@@ -313,6 +274,7 @@ export const addSubreddit = action({
   handler: async (ctx, args): Promise<{
     id: string
     relevanceScore: number
+    reasoning: string
     name: string
   }> => {
     const context: { projectId: string; cleanName: string } = await ctx.runQuery(
@@ -320,41 +282,35 @@ export const addSubreddit = action({
       { name: args.name },
     )
 
-    const validationPromise = validateSubreddit(ctx, context.cleanName)
-    const detailsPromise = communityDetails(ctx, context.cleanName)
-
-    const validation = await validationPromise
+    const validation = await validateSubreddit(ctx, context.cleanName)
     if (!validZernioValidation(validation)) {
-      void detailsPromise.catch(() => null)
       throw new Error("INVALID_SUBREDDIT_NAME")
     }
 
-    const detailsPayload = await detailsPromise
-    const details = communityFromDetails(detailsPayload)
-    const memberCount =
-      typeof details.subscribers === "number"
-        ? details.subscribers
-        : typeof details.memberCount === "number"
-          ? details.memberCount
-          : typeof details.members === "number"
-            ? details.members
-            : undefined
-    const description =
-      details.publicDescription ??
-      details.public_description ??
-      details.description ??
-      undefined
+    const scored: {
+      name: string
+      memberCount?: number
+      description?: string
+      rulesJson?: string
+      relevanceScore: number
+      reasoning: string
+    } = await ctx.runAction(internal.onboarding.subredditDiscovery.scoreManualSubreddit, {
+      projectId: context.projectId as Id<"projects">,
+      name: context.cleanName,
+    })
 
     const result = await ctx.runMutation(internal.subreddits.insertManualSubreddit, {
-      projectId: context.projectId as never,
-      name: context.cleanName,
-      memberCount,
-      description: description?.slice(0, 1000),
-      rulesJson: details.rules === undefined ? undefined : stringifyRulesJson(details.rules),
+      projectId: context.projectId as Id<"projects">,
+      name: scored.name,
+      memberCount: scored.memberCount,
+      description: scored.description?.slice(0, 1000),
+      rulesJson: scored.rulesJson,
+      relevanceScore: scored.relevanceScore,
+      reasoning: scored.reasoning,
     })
     try {
       await ctx.runAction(internal.reddit.refreshProjectSubredditAccess, {
-        projectId: context.projectId as never,
+        projectId: context.projectId as Id<"projects">,
       })
     } catch {
       console.warn("Subreddit access refresh failed after manual add")
