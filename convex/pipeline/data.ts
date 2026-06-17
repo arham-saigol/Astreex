@@ -1,12 +1,61 @@
 import { v } from "convex/values"
-import { internalQuery } from "../_generated/server"
+import { internalQuery, type QueryCtx } from "../_generated/server"
 import type { Doc, Id } from "../_generated/dataModel"
 import { getPipelineLimits, getPlanLimits } from "../lib/planLimits"
+import {
+  isReadyRedditAccount,
+  isUsableRedditAccount,
+  normalizeSubredditName,
+} from "../lib/accountSafety"
 
 const RECENT_CANDIDATE_WINDOW_MS = 48 * 60 * 60 * 1000
 
-function normalizeSubredditName(name: string) {
-  return name.replace(/^r\//i, "").trim().toLowerCase()
+type WarmupMode = "none" | "ready" | "partial_warmup" | "all_warmup"
+
+function warmupModeFromAccounts(accounts: Doc<"redditAccounts">[]): WarmupMode {
+  const usable = accounts.filter(isUsableRedditAccount)
+  if (usable.length === 0) return "none"
+  const ready = usable.filter(isReadyRedditAccount)
+  if (ready.length === 0) return "all_warmup"
+  return ready.length === usable.length ? "ready" : "partial_warmup"
+}
+
+async function safetyContext(ctx: { db: QueryCtx["db"] }, projectId: Id<"projects">) {
+  const accounts = await ctx.db
+    .query("redditAccounts")
+    .withIndex("by_projectId", (q) => q.eq("projectId", projectId))
+    .take(50)
+  const usableAccounts = accounts.filter(isUsableRedditAccount)
+  const readyAccounts = usableAccounts.filter(isReadyRedditAccount)
+  const accountsAllowedForNormalMode = readyAccounts.length > 0
+    ? readyAccounts
+    : usableAccounts
+  const usableAccountIds = new Set(
+    accountsAllowedForNormalMode.map((account) => account._id),
+  )
+  const accessRows = await ctx.db
+    .query("redditSubredditAccess")
+    .withIndex("by_projectId", (q) => q.eq("projectId", projectId))
+    .take(500)
+  const postableSubreddits = new Set(
+    accessRows
+      .filter((row) => row.canPost && usableAccountIds.has(row.redditAccountId))
+      .map((row) => row.subreddit),
+  )
+
+  return {
+    warmupMode: warmupModeFromAccounts(accounts),
+    postableSubreddits,
+  }
+}
+
+function filterPostableSubreddits<T extends { name: string }>(
+  subreddits: T[],
+  postableSubreddits: Set<string>,
+) {
+  return subreddits.filter((subreddit) =>
+    postableSubreddits.has(normalizeSubredditName(subreddit.name)),
+  )
 }
 
 export function isValidProjectIntelligenceProfile(intelligenceJson: string) {
@@ -47,9 +96,13 @@ export const getProjectReadiness = internalQuery({
       .withIndex("by_projectId_active", (q) =>
         q.eq("projectId", args.projectId).eq("active", true),
       )
-      .take(1)
+      .take(100)
     if (subreddits.length === 0) {
       return { ready: false as const, reason: "no_active_subreddits" }
+    }
+    const safety = await safetyContext(ctx, args.projectId)
+    if (filterPostableSubreddits(subreddits, safety.postableSubreddits).length === 0) {
+      return { ready: false as const, reason: "no_postable_subreddits" }
     }
 
     return {
@@ -79,7 +132,9 @@ export const loadActiveSubreddits = internalQuery({
       )
       .take(100)
 
-    return subreddits
+    const safety = await safetyContext(ctx, args.projectId)
+
+    return filterPostableSubreddits(subreddits, safety.postableSubreddits)
       .sort((a, b) => {
         if (a.relevanceScore !== b.relevanceScore) {
           return b.relevanceScore - a.relevanceScore
@@ -114,10 +169,13 @@ export const loadFilterContext = internalQuery({
         post !== null && post.projectId === args.projectId,
     )
 
+    const safety = await safetyContext(ctx, args.projectId)
+
     return {
       project: {
         _id: project._id,
         plan: project.plan,
+        warmupMode: safety.warmupMode,
       },
       brand: {
         intelligenceJson: brand.intelligenceJson,
@@ -149,7 +207,12 @@ export const loadReplyDraftContext = internalQuery({
       throw new Error("Surfaced post not found")
     }
 
+    const safety = await safetyContext(ctx, args.projectId)
+
     return {
+      safety: {
+        warmupMode: safety.warmupMode,
+      },
       brand: {
         intelligenceJson: brand.intelligenceJson,
       },
@@ -182,7 +245,8 @@ export const loadOriginalDraftContext = internalQuery({
         q.eq("projectId", args.projectId).eq("active", true),
       )
       .take(100)
-    const cappedSubreddits = subreddits
+    const safety = await safetyContext(ctx, args.projectId)
+    const cappedSubreddits = filterPostableSubreddits(subreddits, safety.postableSubreddits)
       .sort((a, b) => {
         if (a.relevanceScore !== b.relevanceScore) {
           return b.relevanceScore - a.relevanceScore
@@ -197,6 +261,9 @@ export const loadOriginalDraftContext = internalQuery({
     if (!subreddit) throw new Error("Target subreddit is not active")
 
     return {
+      safety: {
+        warmupMode: safety.warmupMode,
+      },
       brand: {
         intelligenceJson: brand.intelligenceJson,
       },
@@ -225,7 +292,8 @@ export const loadRecentUncardedCandidates = internalQuery({
         q.eq("projectId", args.projectId).eq("active", true),
       )
       .take(100)
-    const activeSubreddits = subreddits
+    const safety = await safetyContext(ctx, args.projectId)
+    const activeSubreddits = filterPostableSubreddits(subreddits, safety.postableSubreddits)
       .sort((a, b) => {
         if (a.relevanceScore !== b.relevanceScore) {
           return b.relevanceScore - a.relevanceScore
@@ -306,9 +374,12 @@ export const loadReplyPipelineContext = internalQuery({
         post !== null && post.projectId === args.projectId,
     )
 
+    const safety = await safetyContext(ctx, args.projectId)
+
     return {
       project: {
         plan: project.plan,
+        warmupMode: safety.warmupMode,
       },
       brand: {
         intelligenceJson: brand.intelligenceJson,
@@ -335,12 +406,16 @@ export const loadOriginalPipelineContext = internalQuery({
     }
 
     const limits = getPipelineLimits(project.plan)
-    const activeSubreddits = (await ctx.db
-      .query("subreddits")
-      .withIndex("by_projectId_active", (q) =>
-        q.eq("projectId", args.projectId).eq("active", true),
-      )
-      .take(100))
+    const safety = await safetyContext(ctx, args.projectId)
+    const activeSubreddits = filterPostableSubreddits(
+      await ctx.db
+        .query("subreddits")
+        .withIndex("by_projectId_active", (q) =>
+          q.eq("projectId", args.projectId).eq("active", true),
+        )
+        .take(100),
+      safety.postableSubreddits,
+    )
       .sort((a, b) => {
         if (a.relevanceScore !== b.relevanceScore) {
           return b.relevanceScore - a.relevanceScore
@@ -408,6 +483,7 @@ export const loadOriginalPipelineContext = internalQuery({
     return {
       project: {
         plan: project.plan,
+        warmupMode: safety.warmupMode,
       },
       brand: {
         intelligenceJson: brand.intelligenceJson,
@@ -466,10 +542,12 @@ export const loadJudgeContext = internalQuery({
         createdAt: row.createdAt,
       }
     }))
+    const safety = await safetyContext(ctx, args.projectId)
 
     return {
       project: {
         plan: project.plan,
+        warmupMode: safety.warmupMode,
       },
       brand: {
         intelligenceJson: brand.intelligenceJson,

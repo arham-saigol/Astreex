@@ -32,6 +32,10 @@ import { isValidProjectIntelligenceProfile } from "./pipeline/data"
 import { stringifyRulesJson } from "./lib/rules"
 import { fireworksKimiK26 } from "./lib/ai"
 import {
+  decideRedditActivityStatus,
+  normalizeRedditUserProfile,
+} from "./lib/accountSafety"
+import {
   zernioAccountId,
   zernioAccountProfileId,
   zernioAccountUsername,
@@ -88,15 +92,29 @@ async function seedRedditAccount(
   }> = {},
 ) {
   return await t.run(async (ctx) => {
-    return await ctx.db.insert("redditAccounts", {
+    const now = Date.now()
+    const redditAccountId = await ctx.db.insert("redditAccounts", {
       projectId,
       redditUsername: overrides.redditUsername ?? "founder1",
       zernioAccountId: `zernio_${overrides.redditUsername ?? "founder1"}`,
       providerCanPost: true,
+      activityStatus: "ready",
+      totalKarma: 200,
+      accountCreatedAt: now - 30 * 24 * 60 * 60 * 1000,
+      activityCheckedAt: now,
+      activityIssues: [],
       isActive: overrides.isActive ?? true,
       healthStatus: overrides.healthStatus ?? "healthy",
-      createdAt: Date.now(),
+      createdAt: now,
     })
+    await ctx.db.insert("redditSubredditAccess", {
+      projectId,
+      redditAccountId,
+      subreddit: "startups",
+      canPost: true,
+      checkedAt: now,
+    })
+    return redditAccountId
   })
 }
 
@@ -117,6 +135,27 @@ async function seedPendingCard(
       status: "pending",
       createdAt,
     })
+  })
+}
+
+async function seedSubredditAccess(
+  t: ReturnType<typeof convexTest>,
+  projectId: Id<"projects">,
+  redditAccountIds: Id<"redditAccounts">[],
+  subreddits: string[],
+) {
+  await t.run(async (ctx) => {
+    for (const redditAccountId of redditAccountIds) {
+      for (const subreddit of subreddits) {
+        await ctx.db.insert("redditSubredditAccess", {
+          projectId,
+          redditAccountId,
+          subreddit,
+          canPost: true,
+          checkedAt: Date.now(),
+        })
+      }
+    }
   })
 }
 
@@ -197,6 +236,34 @@ describe("pipeline helpers", () => {
   test("stringifyRulesJson handles unsanitizable rules", () => {
     expect(stringifyRulesJson(undefined)).toBe("")
     expect(stringifyRulesJson(Symbol("bad"))).toBe("")
+  })
+
+  test("FetchLayer profile normalization and warm-up thresholds are safe", () => {
+    const now = Date.parse("2026-06-17T00:00:00.000Z")
+    const ready = decideRedditActivityStatus(
+      normalizeRedditUserProfile({
+        user: {
+          link_karma: 75,
+          comment_karma: 50,
+          created_utc: now / 1000 - 30 * 24 * 60 * 60,
+        },
+      }),
+      now,
+    )
+    const warmup = decideRedditActivityStatus(
+      normalizeRedditUserProfile({ totalKarma: 10, createdAt: now - 2 * 24 * 60 * 60 * 1000 }),
+      now,
+    )
+    const unknown = decideRedditActivityStatus(normalizeRedditUserProfile({}), now)
+
+    expect(ready).toMatchObject({
+      activityStatus: "ready",
+      totalKarma: 125,
+      activityIssues: [],
+    })
+    expect(warmup.activityStatus).toBe("warmup")
+    expect(warmup.activityIssues).toEqual(["low_karma", "new_account"])
+    expect(unknown.activityStatus).toBe("warmup")
   })
 
   test("Zernio account helpers preserve top-level account fields", () => {
@@ -604,6 +671,11 @@ describe("pipeline Convex mutations", () => {
         redditUsername: "founder1",
         zernioAccountId: "zernio_founder1",
         providerCanPost: true,
+        activityStatus: "ready",
+        totalKarma: 200,
+        accountCreatedAt: Date.now() - 30 * 24 * 60 * 60 * 1000,
+        activityCheckedAt: Date.now(),
+        activityIssues: [],
         isActive: true,
         healthStatus: "healthy",
         createdAt: Date.now(),
@@ -613,6 +685,11 @@ describe("pipeline Convex mutations", () => {
         redditUsername: "founder2",
         zernioAccountId: "zernio_founder2",
         providerCanPost: true,
+        activityStatus: "ready",
+        totalKarma: 200,
+        accountCreatedAt: Date.now() - 30 * 24 * 60 * 60 * 1000,
+        activityCheckedAt: Date.now(),
+        activityIssues: [],
         isActive: true,
         healthStatus: "healthy",
         createdAt: Date.now(),
@@ -631,6 +708,7 @@ describe("pipeline Convex mutations", () => {
 
       return { runId, account1, account2, surfacedPostId }
     })
+    await seedSubredditAccess(t, projectId, [seeded.account1, seeded.account2], ["saas"])
 
     const result = await t.mutation(internal.pipeline.createCards.createDailyReplyCards, {
       projectId,
@@ -691,6 +769,11 @@ describe("pipeline Convex mutations", () => {
         redditUsername: "founder1",
         zernioAccountId: "zernio_founder1",
         providerCanPost: true,
+        activityStatus: "ready",
+        totalKarma: 200,
+        accountCreatedAt: Date.now() - 30 * 24 * 60 * 60 * 1000,
+        activityCheckedAt: Date.now(),
+        activityIssues: [],
         isActive: true,
         healthStatus: "healthy",
         createdAt: Date.now(),
@@ -700,6 +783,11 @@ describe("pipeline Convex mutations", () => {
         redditUsername: "founder2",
         zernioAccountId: "zernio_founder2",
         providerCanPost: true,
+        activityStatus: "ready",
+        totalKarma: 200,
+        accountCreatedAt: Date.now() - 30 * 24 * 60 * 60 * 1000,
+        activityCheckedAt: Date.now(),
+        activityIssues: [],
         isActive: true,
         healthStatus: "healthy",
         createdAt: Date.now(),
@@ -717,6 +805,12 @@ describe("pipeline Convex mutations", () => {
       })
       return { runId, redditAccountId, secondRedditAccountId, surfacedPostId }
     })
+    await seedSubredditAccess(
+      t,
+      projectId,
+      [seeded.redditAccountId, seeded.secondRedditAccountId],
+      ["saas"],
+    )
 
     const selectedDrafts = [
       {
@@ -789,6 +883,11 @@ describe("pipeline Convex mutations", () => {
         redditUsername: "healthy",
         zernioAccountId: "zernio_healthy",
         providerCanPost: true,
+        activityStatus: "ready",
+        totalKarma: 200,
+        accountCreatedAt: Date.now() - 30 * 24 * 60 * 60 * 1000,
+        activityCheckedAt: Date.now(),
+        activityIssues: [],
         isActive: true,
         healthStatus: "healthy",
         createdAt: Date.now(),
@@ -806,6 +905,7 @@ describe("pipeline Convex mutations", () => {
       })
       return { runId, redditAccountId, surfacedPostId }
     })
+    await seedSubredditAccess(t, projectId, [seeded.redditAccountId], ["saas"])
 
     const result = await t.mutation(internal.pipeline.createCards.createDailyReplyCards, {
       projectId,
@@ -849,6 +949,11 @@ describe("pipeline Convex mutations", () => {
         redditUsername: "founder1",
         zernioAccountId: "zernio_founder1",
         providerCanPost: true,
+        activityStatus: "ready",
+        totalKarma: 200,
+        accountCreatedAt: Date.now() - 30 * 24 * 60 * 60 * 1000,
+        activityCheckedAt: Date.now(),
+        activityIssues: [],
         isActive: true,
         healthStatus: "healthy",
         createdAt: Date.now(),
@@ -877,6 +982,7 @@ describe("pipeline Convex mutations", () => {
       })
       return { runId, accountId, surfacedPostId, otherSurfacedPostId }
     })
+    await seedSubredditAccess(t, projectId, [seeded.accountId], ["saas"])
 
     const wrongRunResult = await t.mutation(
       internal.pipeline.createCards.createDailyReplyCards,
@@ -945,6 +1051,11 @@ describe("pipeline Convex mutations", () => {
         redditUsername: "founder1",
         zernioAccountId: "zernio_founder1",
         providerCanPost: true,
+        activityStatus: "ready",
+        totalKarma: 200,
+        accountCreatedAt: Date.now() - 30 * 24 * 60 * 60 * 1000,
+        activityCheckedAt: Date.now(),
+        activityIssues: [],
         isActive: true,
         healthStatus: "healthy",
         createdAt: Date.now(),
@@ -954,12 +1065,21 @@ describe("pipeline Convex mutations", () => {
         redditUsername: "founder2",
         zernioAccountId: "zernio_founder2",
         providerCanPost: true,
+        activityStatus: "ready",
+        totalKarma: 200,
+        accountCreatedAt: Date.now() - 30 * 24 * 60 * 60 * 1000,
+        activityCheckedAt: Date.now(),
+        activityIssues: [],
         isActive: true,
         healthStatus: "healthy",
         createdAt: Date.now(),
       })
       return { runId, account1, account2 }
     })
+    await seedSubredditAccess(t, projectId, [seeded.account1, seeded.account2], [
+      "saas",
+      "startups",
+    ])
 
     const selectedDrafts = [
       {
@@ -1074,6 +1194,11 @@ describe("pipeline Convex mutations", () => {
         redditUsername: "founder1",
         zernioAccountId: "zernio_founder1",
         providerCanPost: true,
+        activityStatus: "ready",
+        totalKarma: 200,
+        accountCreatedAt: Date.now() - 30 * 24 * 60 * 60 * 1000,
+        activityCheckedAt: Date.now(),
+        activityIssues: [],
         isActive: true,
         healthStatus: "healthy",
         createdAt: Date.now(),
@@ -1352,8 +1477,10 @@ describe("poster helpers", () => {
     await t.run(async (ctx) => {
       await ctx.db.patch(cardId, { status: "scheduled" })
     })
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
-      new Response(
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      void input
+      void init
+      return new Response(
         JSON.stringify({
           post: {
             id: "zernio_post_1",
@@ -1361,8 +1488,8 @@ describe("poster helpers", () => {
           },
         }),
         { status: 200 },
-      ),
-    )
+      )
+    })
     vi.stubGlobal("fetch", fetchMock)
 
     await t.action(internal.pipeline.poster.postToReddit, { cardId })

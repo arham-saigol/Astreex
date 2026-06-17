@@ -44,6 +44,26 @@ export type FetchLayerPost = {
   author?: string
 }
 
+export type FetchLayerUserProfile = {
+  username?: string
+  name?: string
+  totalKarma?: number
+  total_karma?: number
+  karma?: number
+  postKarma?: number
+  post_karma?: number
+  linkKarma?: number
+  link_karma?: number
+  commentKarma?: number
+  comment_karma?: number
+  accountCreatedAt?: number | string
+  createdAt?: number | string
+  created_at?: number | string
+  createdUtc?: number
+  created_utc?: number
+  created?: number | string
+}
+
 export type FetchLayerComment = {
   id?: string
   name?: string
@@ -136,6 +156,14 @@ export async function communityPosts(
     limit: args.limit ?? 100,
   })
   return arrayFromPayload<FetchLayerPost>(payload, ["posts", "results"])
+}
+
+export async function userProfile(ctx: ActionCtx, username: string) {
+  return await fetchLayerJson<FetchLayerUserProfile | { user?: FetchLayerUserProfile; profile?: FetchLayerUserProfile }>(
+    ctx,
+    "user-profile",
+    { username },
+  )
 }
 
 export async function searchPosts(

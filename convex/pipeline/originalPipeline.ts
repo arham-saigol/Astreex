@@ -12,6 +12,7 @@ import {
   deepseekV4Pro,
   judgeSettings,
 } from "../lib/ai"
+import { WARMUP_PROMPT_NOTE } from "../lib/accountSafety"
 import { getPipelineLimits, type Plan } from "../lib/planLimits"
 import { compactIntelligenceJson } from "./intelligenceContext"
 import type {
@@ -27,7 +28,7 @@ const ANGLES_PER_THEME = 3
 export const ORIGINAL_REWRITE_ROUNDS = 2
 
 type OriginalPipelineContext = {
-  project: { plan: Plan }
+  project: { plan: Plan; warmupMode?: string }
   brand: { intelligenceJson: string }
   subreddits: Array<{
     name: string
@@ -616,6 +617,7 @@ async function runSignalScout(
       `Signal Scout: find ${plan === "starter" ? "5-20" : `up to ${limit}`} original-post signals for these subreddits.`,
       "Each signal must reference a provided sourceId, name the pain point, explain why it matters, and suggest a possible original post direction.",
       "Prefer recurring problems, nuanced founder lessons, tactical questions, and discussion patterns. Avoid inventing facts.",
+      context.project.warmupMode === "all_warmup" ? WARMUP_PROMPT_NOTE : "",
       `Project intelligence JSON: ${compactIntelligenceJson(context.brand.intelligenceJson, "original")}`,
       `Subreddit metadata JSON: ${JSON.stringify(subredditPrompt(context, subreddits))}`,
       `Recent source posts JSON: ${JSON.stringify(posts)}`,
@@ -641,6 +643,7 @@ async function runStarterPlanner(
       "Post Opportunity Planner: group these signals into strong original-post opportunities.",
       `Return exactly ${targetCount} post briefs. Each brief needs targetSubreddit, titleAngle, bodyDirection, rationale, and relevant signalIds.`,
       "Pick only angles that are likely to fit the target subreddit and sound like a helpful founder, not a marketer.",
+      context.project.warmupMode === "all_warmup" ? WARMUP_PROMPT_NOTE : "",
       `Project intelligence JSON: ${compactIntelligenceJson(context.brand.intelligenceJson, "original")}`,
       `Subreddit metadata JSON: ${JSON.stringify(context.subreddits)}`,
       `Signals JSON: ${JSON.stringify(signals)}`,
@@ -664,6 +667,7 @@ async function runThemeClusterer(
       "Theme Clusterer: cluster original-post signals into distinct themes.",
       `Return ${targetCount} themes: 2x today's original-card target before judging.`,
       "Each theme should include title, summary, relevant signalIds, and likely targetSubreddits.",
+      context.project.warmupMode === "all_warmup" ? WARMUP_PROMPT_NOTE : "",
       `Project intelligence JSON: ${compactIntelligenceJson(context.brand.intelligenceJson, "original")}`,
       `Signals JSON: ${JSON.stringify(signals)}`,
     ].join("\n\n"),
@@ -686,6 +690,7 @@ async function runThemeJudge(
       "Post Opportunity Judge: select the strongest original-post themes for today.",
       `Return exactly ${targetCount} themeIds.`,
       "Prioritize useful, low-risk, non-promotional themes with clear subreddit fit and variety.",
+      context.project.warmupMode === "all_warmup" ? WARMUP_PROMPT_NOTE : "",
       `Project intelligence JSON: ${compactIntelligenceJson(context.brand.intelligenceJson, "judge")}`,
       `Recent performance JSON: ${JSON.stringify(context.performance)}`,
       `Themes JSON: ${JSON.stringify(themes)}`,
@@ -709,6 +714,7 @@ async function runAngleGenerator(
       "Angle Generator: generate subreddit-fit original post angles for each selected theme.",
       `Return ${ANGLES_PER_THEME} angle options per theme.`,
       "Each angle needs themeId, targetSubreddit, titleAngle, bodyDirection, and rationale.",
+      context.project.warmupMode === "all_warmup" ? WARMUP_PROMPT_NOTE : "",
       `Project intelligence JSON: ${compactIntelligenceJson(context.brand.intelligenceJson, "original")}`,
       `Subreddit metadata JSON: ${JSON.stringify(context.subreddits)}`,
       `Selected themes JSON: ${JSON.stringify(themes)}`,
@@ -731,6 +737,7 @@ async function runAngleFitJudge(
     prompt: [
       "Angle Fit Judge: choose one angle per theme with the best subreddit fit.",
       "Return selectedAngleIds. Favor usefulness, specificity, and low moderation risk.",
+      context.project.warmupMode === "all_warmup" ? WARMUP_PROMPT_NOTE : "",
       `Project intelligence JSON: ${compactIntelligenceJson(context.brand.intelligenceJson, "judge")}`,
       `Angle options JSON: ${JSON.stringify(angles)}`,
     ].join("\n\n"),
@@ -782,6 +789,7 @@ async function runFinalJudge(
       "Final Post Judge: select original Reddit post cards for today's feed.",
       `Return up to ${targetCount} selectedDraftIds plus decisions for rejected drafts with rewriteInstructions when useful.`,
       "Approve only posts that are useful, subreddit-fit, non-promotional, specific, and low moderation risk.",
+      context.project.warmupMode === "all_warmup" ? WARMUP_PROMPT_NOTE : "",
       `Project intelligence JSON: ${compactIntelligenceJson(context.brand.intelligenceJson, "judge")}`,
       `Recent performance JSON: ${JSON.stringify(context.performance)}`,
       `Drafts JSON: ${JSON.stringify(draftPrompt(candidates))}`,

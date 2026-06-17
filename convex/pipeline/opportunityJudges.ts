@@ -12,6 +12,7 @@ import {
   deepseekV4Pro,
   judgeSettings,
 } from "../lib/ai"
+import { WARMUP_PROMPT_NOTE } from "../lib/accountSafety"
 import { getPipelineLimits, type Plan } from "../lib/planLimits"
 import { compactIntelligenceJson } from "./intelligenceContext"
 import {
@@ -29,7 +30,7 @@ const judgeSchema = z.object({
 })
 
 type ReplyPipelineContext = {
-  project: { plan: Plan }
+  project: { plan: Plan; warmupMode?: string }
   brand: { intelligenceJson: string }
   posts: Doc<"surfacedPosts">[]
 }
@@ -195,6 +196,7 @@ async function runOpportunityJudge(
   intelligenceJson: string,
   limit: number,
   reasoning: "high" | "max",
+  warmupMode?: string,
 ) {
   const result = await generateObject({
     model: deepseekV4Pro(),
@@ -206,6 +208,7 @@ async function runOpportunityJudge(
     prompt: [
       "Choose Reddit posts that deserve a high-quality reply draft today.",
       "Prefer posts where the founder can add specific experience, practical advice, or useful clarification without sounding promotional.",
+      warmupMode === "all_warmup" ? WARMUP_PROMPT_NOTE : "",
       `Return up to ${limit} surfacedPostId values from the candidates.`,
       `Project intelligence JSON: ${compactIntelligenceJson(intelligenceJson, "judge")}`,
       `Candidates JSON: ${JSON.stringify(promptPosts(posts, candidates))}`,
@@ -257,6 +260,7 @@ export const selectReplyOpportunities = internalAction({
         context.brand.intelligenceJson,
         limits.replyDraftTarget,
         "max",
+        context.project.warmupMode,
       )
       return { opportunities, shardCount: 1 }
     }
@@ -275,6 +279,7 @@ export const selectReplyOpportunities = internalAction({
         context.brand.intelligenceJson,
         shardReturnCount(limits.replyDraftTarget, shards.length, shard.length),
         "high",
+        context.project.warmupMode,
       )
     }))
 
@@ -290,6 +295,7 @@ export const selectReplyOpportunities = internalAction({
         "Merge shard-selected Reddit reply opportunities into the final draft queue.",
         `Return up to ${limits.replyDraftTarget} surfacedPostId values.`,
         "Prioritize the strongest reply opportunities while keeping subreddit diversity where possible.",
+        context.project.warmupMode === "all_warmup" ? WARMUP_PROMPT_NOTE : "",
         `Project intelligence JSON: ${compactIntelligenceJson(context.brand.intelligenceJson, "judge")}`,
         `Candidates JSON: ${JSON.stringify(mergedCandidates)}`,
       ].join("\n\n"),

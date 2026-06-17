@@ -41,6 +41,10 @@ const redditHealthStatus = v.union(
   v.literal("warning"),
   v.literal("banned"),
 )
+const redditActivityStatus = v.union(
+  v.literal("ready"),
+  v.literal("warmup"),
+)
 const subredditAddedBy = v.union(v.literal("agent"), v.literal("user"))
 const cardType = v.union(v.literal("reply"), v.literal("original"))
 const cardStatus = v.union(
@@ -170,11 +174,40 @@ export default defineSchema({
     providerNeedsReconnect: v.optional(v.boolean()),
     providerIssues: v.optional(v.array(v.string())),
     providerLastCheckedAt: v.optional(v.number()),
+    activityStatus: v.optional(redditActivityStatus),
+    totalKarma: v.optional(v.number()),
+    postKarma: v.optional(v.number()),
+    commentKarma: v.optional(v.number()),
+    accountCreatedAt: v.optional(v.number()),
+    activityCheckedAt: v.optional(v.number()),
+    warmupSince: v.optional(v.number()),
+    activityIssues: v.optional(v.array(v.string())),
     createdAt: v.number(),
   })
     .index("by_projectId", ["projectId"])
     .index("by_projectId_and_redditUsername", ["projectId", "redditUsername"])
     .index("by_projectId_and_zernioAccountId", ["projectId", "zernioAccountId"]),
+
+  redditSubredditAccess: defineTable({
+    projectId: v.id("projects"),
+    redditAccountId: v.id("redditAccounts"),
+    subreddit: v.string(),
+    canPost: v.boolean(),
+    checkedAt: v.number(),
+    reason: v.optional(v.string()),
+  })
+    .index("by_projectId", ["projectId"])
+    .index("by_projectId_and_subreddit", ["projectId", "subreddit"])
+    .index("by_redditAccountId", ["redditAccountId"])
+    .index("by_redditAccountId_and_subreddit", [
+      "redditAccountId",
+      "subreddit",
+    ])
+    .index("by_projectId_and_redditAccountId_and_subreddit", [
+      "projectId",
+      "redditAccountId",
+      "subreddit",
+    ]),
 
   subreddits: defineTable({
     projectId: v.id("projects"),

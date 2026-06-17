@@ -7,6 +7,7 @@ import { internal } from "../_generated/api"
 import { internalAction } from "../_generated/server"
 import { deepseekHighReasoningOptions, deepseekV4Pro, judgeSettings } from "../lib/ai"
 import { getPipelineLimits } from "../lib/planLimits"
+import { WARMUP_PROMPT_NOTE } from "../lib/accountSafety"
 import { compactIntelligenceJson } from "./intelligenceContext"
 import {
   scoutedPostValidator,
@@ -132,6 +133,7 @@ export const runSubredditScout = internalAction({
         `Scout r/${subreddit} for strong reply opportunities for a B2B founder.`,
         "Return post IDs that are specific, recent, discussion-worthy, and likely to benefit from a helpful non-promotional reply.",
         "Avoid memes, thin announcements, ragebait, and posts where a brand reply would feel intrusive.",
+        context.project.warmupMode === "all_warmup" ? WARMUP_PROMPT_NOTE : "",
         `Return up to ${limits.maxScoutPostsPerSubreddit} surfacedPostId values from the candidates.`,
         `Project intelligence JSON: ${compactIntelligenceJson(context.brand.intelligenceJson, "filter")}`,
         `Candidates JSON: ${JSON.stringify(promptPosts)}`,
