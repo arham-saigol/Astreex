@@ -9,13 +9,14 @@ export class ProviderHttpError extends Error {
   provider: Provider
   endpoint: string
   retryable: boolean
+  retryAfterMs?: number
 
   constructor(
     provider: Provider,
     endpoint: string,
     status: number,
     body: unknown,
-    options: { message?: string; retryable?: boolean } = {},
+    options: { message?: string; retryable?: boolean; retryAfterMs?: number } = {},
   ) {
     const message =
       options.message ??
@@ -29,8 +30,25 @@ export class ProviderHttpError extends Error {
     this.provider = provider
     this.endpoint = endpoint
     this.retryable =
-      options.retryable ?? [429, 500, 502, 503, 504].includes(status)
+      options.retryable ?? [408, 425, 429, 500, 502, 503, 504].includes(status)
+    this.retryAfterMs = options.retryAfterMs
   }
+}
+
+function parseRetryAfterMs(value: string | null) {
+  if (!value) return undefined
+  const seconds = Number(value)
+  if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000)
+  const timestamp = Date.parse(value)
+  return Number.isFinite(timestamp) ? Math.max(0, timestamp - Date.now()) : undefined
+}
+
+function parseRateLimitResetMs(value: string | null) {
+  if (!value) return undefined
+  const numeric = Number(value)
+  if (!Number.isFinite(numeric)) return parseRetryAfterMs(value)
+  const timestamp = numeric > 10_000_000_000 ? numeric : numeric * 1000
+  return Math.max(0, timestamp - Date.now())
 }
 
 async function readResponseBody(response: Response) {
@@ -68,7 +86,12 @@ export async function providerFetchJson<T>(
     }).catch(() => null)
 
     if (!response.ok) {
-      throw new ProviderHttpError(provider, endpoint, response.status, body)
+      const retryAfterMs =
+        parseRetryAfterMs(response.headers.get("Retry-After")) ??
+        parseRateLimitResetMs(response.headers.get("X-RateLimit-Reset"))
+      throw new ProviderHttpError(provider, endpoint, response.status, body, {
+        retryAfterMs,
+      })
     }
 
     return body as T

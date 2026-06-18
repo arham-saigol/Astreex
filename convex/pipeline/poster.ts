@@ -100,18 +100,27 @@ function extractCreatedPost(response: ZernioPostResponse) {
 }
 
 function extractCreatedComment(response: ZernioCommentResponse) {
-  const body = response.comment ?? response
-  const redditId = body.redditId ?? body.id ?? body._id
+  const body = (response.data ?? response.comment ?? response) as {
+    commentId?: string
+    redditId?: string
+    id?: string
+    _id?: string
+    cid?: string
+    thingId?: string
+    permalink?: string
+  }
+  const redditId = body.commentId ?? body.redditId ?? body.id ?? body._id ?? body.cid
+  const normalizedRedditId = redditId?.startsWith("t1_") ? redditId.slice(3) : redditId
   const redditThingId =
     body.thingId ??
     (redditId
-      ? redditId.includes("_")
+      ? redditId.startsWith("t1_")
         ? redditId
         : `t1_${redditId}`
       : undefined)
 
   return {
-    redditId: redditId?.includes("_") ? redditId.split("_")[1] : redditId,
+    redditId: normalizedRedditId,
     redditThingId,
     permalink: absoluteRedditUrl(body.permalink),
   }
@@ -571,6 +580,15 @@ export const markPostSucceeded = internalMutation({
     const redditThingId =
       args.redditThingId ??
       `${card.type === "reply" ? "t1" : "t3"}_${args.redditId}`
+    const surfacedPost = card.surfacedPostId
+      ? await ctx.db.get(card.surfacedPostId)
+      : null
+    const parentRedditThingId = card.type === "reply"
+      ? surfacedPost?.redditThingId ?? (surfacedPost ? `t3_${surfacedPost.redditPostId}` : undefined)
+      : redditThingId
+    const parentPermalink = card.type === "reply"
+      ? surfacedPost?.url
+      : args.permalink
 
     await ctx.db.patch(args.cardId, {
       status: "posted",
@@ -590,11 +608,15 @@ export const markPostSucceeded = internalMutation({
       zernioPostId: args.zernioPostId,
       subreddit,
       type: card.type,
+      parentRedditThingId,
+      parentPermalink,
       permalink: args.permalink,
       score: 0,
       replyCount: 0,
       visibility: "visible",
       lastCheckedAt: postedAt,
+      lastAnalyticsAttemptAt: postedAt,
+      lastAnalyticsSource: "zernio",
       createdAt: postedAt,
     })
   },
