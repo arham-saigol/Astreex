@@ -76,6 +76,37 @@ describe("analytics refresh", () => {
     expect(metrics.karmaEarned).toBe(525)
   })
 
+  test("growth analytics are enforced server-side", async () => {
+    const t = convexTest(schema, modules)
+    const now = Date.now()
+    const { projectRef } = await t.run(async (ctx) => {
+      const userId = await ctx.db.insert("users", {
+        tokenIdentifier: "test|user_1",
+        email: "founder@example.com",
+        createdAt: now,
+      })
+      await ctx.db.insert("projects", {
+        userId,
+        publicId: "p_starteranalytics",
+        slug: "astreex",
+        name: "Astreex",
+        plan: "starter",
+        planStatus: "active",
+        onboardingStatus: "complete",
+        timezone: "America/New_York",
+        lastActiveAt: now,
+        createdAt: now,
+      })
+      return { projectRef: "astreex-p_starteranalytics" }
+    })
+
+    const authed = t.withIdentity({ tokenIdentifier: "test|user_1" })
+    await expect(authed.query(api.analytics.getTrendData, { projectRef, timeframe: "30d" }))
+      .rejects.toThrow("Growth analytics")
+    await expect(authed.query(api.analytics.getBestPerforming, { projectRef, timeframe: "30d" }))
+      .rejects.toThrow("Growth analytics")
+  })
+
   test("dashboard refresh candidates use 5m recent and 30m older staleness", async () => {
     const t = convexTest(schema, modules)
     const now = Date.now()
@@ -156,6 +187,107 @@ describe("analytics refresh", () => {
 
     const parentIds = prepared.groups.map((group) => group.parentRedditThingId).sort()
     expect(parentIds).toEqual(["t3_stale_old", "t3_stale_recent"])
+  })
+
+  test("dashboard refresh considers older stale candidates and only locks returned groups", async () => {
+    const t = convexTest(schema, modules)
+    const now = Date.now()
+    const { projectId, redditAccountId } = await t.run(async (ctx) => {
+      const userId = await ctx.db.insert("users", {
+        tokenIdentifier: "test|user_1",
+        email: "founder@example.com",
+        createdAt: now,
+      })
+      const projectId = await ctx.db.insert("projects", {
+        userId,
+        name: "Astreex",
+        plan: "growth",
+        planStatus: "active",
+        onboardingStatus: "complete",
+        timezone: "America/New_York",
+        lastActiveAt: now,
+        createdAt: now,
+      })
+      const redditAccountId = await ctx.db.insert("redditAccounts", {
+        projectId,
+        redditUsername: "founder",
+        zernioAccountId: "acct_1",
+        isActive: true,
+        healthStatus: "healthy",
+        createdAt: now,
+      })
+      const cardId = await ctx.db.insert("cards", {
+        projectId,
+        surfacedPostId: null,
+        redditAccountId,
+        type: "original",
+        targetSubreddit: "startups",
+        draftContent: "Title\nBody",
+        status: "posted",
+        createdAt: now,
+      })
+
+      for (let index = 0; index < 150; index++) {
+        await ctx.db.insert("postedContent", {
+          projectId,
+          cardId,
+          redditAccountId,
+          redditId: `fresh_${index}`,
+          redditThingId: `t3_fresh_${index}`,
+          parentRedditThingId: `t3_fresh_${index}`,
+          subreddit: "startups",
+          type: "original",
+          score: 0,
+          replyCount: 0,
+          visibility: "visible",
+          lastCheckedAt: now,
+          lastAnalyticsAttemptAt: now,
+          createdAt: now - index,
+        })
+      }
+
+      for (let index = 0; index < 13; index++) {
+        await ctx.db.insert("postedContent", {
+          projectId,
+          cardId,
+          redditAccountId,
+          redditId: `stale_${index}`,
+          redditThingId: `t3_stale_${index}`,
+          parentRedditThingId: `t3_stale_${index}`,
+          subreddit: "startups",
+          type: "original",
+          score: 0,
+          replyCount: 0,
+          visibility: "visible",
+          lastCheckedAt: now - 60 * 60 * 1000,
+          lastAnalyticsAttemptAt: now - 60 * 60 * 1000,
+          createdAt: now - 10 * 24 * 60 * 60 * 1000 - index,
+        })
+      }
+
+      await ctx.db.insert("dashboardAnalyticsSessions", {
+        projectId,
+        sessionId: "session_1",
+        timeframe: "all",
+        redditAccountIds: [redditAccountId],
+        openedAt: now,
+        lastHeartbeatAt: now,
+        expiresAt: now + 30_000,
+      })
+      return { projectId, redditAccountId }
+    })
+
+    const prepared = await t.mutation(internal.analytics.prepareDashboardAnalyticsRefresh, {
+      projectId,
+      timeframe: "all",
+      redditAccountIds: [redditAccountId],
+      sessionId: "session_1",
+    })
+
+    const locks = await t.run(async (ctx) => await ctx.db.query("dashboardAnalyticsLocks").take(20))
+    expect(prepared.groups).toHaveLength(12)
+    expect(prepared.groups.some((group) => group.parentRedditThingId.startsWith("t3_stale_"))).toBe(true)
+    expect(locks).toHaveLength(12)
   })
 
   test("refreshAnalytics does not update lastAnalyticsRefresh while metrics are stubbed", async () => {

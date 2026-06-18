@@ -332,6 +332,11 @@ export default defineSchema({
     .index("by_status_and_createdAt", ["status", "createdAt"])
     .index("by_projectId_and_surfacedPostId", ["projectId", "surfacedPostId"])
     .index("by_projectId_and_createdAt", ["projectId", "createdAt"])
+    .index("by_projectId_and_redditAccountId_and_createdAt", [
+      "projectId",
+      "redditAccountId",
+      "createdAt",
+    ])
     .index("by_projectId_and_pipelineRunId_and_draftKey", [
       "projectId",
       "pipelineRunId",
@@ -368,6 +373,10 @@ export default defineSchema({
     .index("by_projectId", ["projectId"])
     .index("by_cardId", ["cardId"])
     .index("by_projectId_and_createdAt", ["projectId", "createdAt"])
+    .index("by_projectId_and_lastAnalyticsAttemptAt", [
+      "projectId",
+      "lastAnalyticsAttemptAt",
+    ])
     .index("by_createdAt", ["createdAt"])
     .index("by_redditAccountId_and_createdAt", ["redditAccountId", "createdAt"])
     .index("by_projectId_and_parentRedditThingId", ["projectId", "parentRedditThingId"]),

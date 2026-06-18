@@ -103,6 +103,7 @@ crons.cron("daily account health monitor", "0 22 * * *", internal.pipeline.healt
 crons.cron("daily provider health sync", "30 22 * * *", internal.pipeline.healthMonitor.syncZernioProviderHealth, {})
 crons.cron("daily reddit safety sync", "0 23 * * *", internal.reddit.refreshAllRedditSafety, {})
 crons.cron("daily stale pipeline cleanup", "0 3 * * *", internal.pipeline.cleanup.cleanupStaleData, {})
+crons.cron("daily dashboard analytics cleanup", "15 3 * * *", internal.analytics.cleanupDashboardAnalyticsOperationalData, {})
 crons.cron("weekly monitored page check", "0 4 * * 1", internal.projectIntelligenceMonitoring.refreshDueMonitoredPages, {})
 
 export default crons

@@ -1,3 +1,4 @@
+import { paginationOptsValidator } from "convex/server"
 import { v } from "convex/values"
 import {
   action,
@@ -49,6 +50,12 @@ const ANALYTICS_CONCURRENCY = 3
 const ZERNIO_GLOBAL_RPM = 600
 const ZERNIO_POSTING_RESERVE_RPM = 120
 const FETCHLAYER_FALLBACKS_PER_RUN = 3
+const DASHBOARD_CONTENT_READ_LIMIT = 1000
+const DASHBOARD_ROLLUP_READ_LIMIT = 2000
+const DASHBOARD_APPROVAL_READ_LIMIT = 1000
+const DASHBOARD_REFRESH_CANDIDATE_LIMIT = 300
+const DASHBOARD_REFRESH_GROUP_LIMIT = 12
+const DASHBOARD_CLEANUP_BATCH_SIZE = 100
 
 type Timeframe = "7d" | "30d" | "all"
 type Visibility = Doc<"postedContent">["visibility"]
@@ -165,23 +172,44 @@ async function validateAccountFilter(
   return new Set(uniqueIds)
 }
 
+function requireGrowthAnalytics(project: Pick<Doc<"projects">, "plan">) {
+  if (project.plan !== "growth" && project.plan !== "scale") {
+    throw new Error("Growth analytics are not available on this plan")
+  }
+}
+
 async function getPostedContent(
   ctx: QueryCtx,
   projectId: Id<"projects">,
   timeframe: Timeframe,
   accountFilter: AccountFilter,
+  limit = DASHBOARD_CONTENT_READ_LIMIT,
 ) {
   const cutoff = cutoffForTimeframe(timeframe)
   const rows: Doc<"postedContent">[] = []
-  for await (const row of ctx.db
+
+  if (accountFilter) {
+    for (const accountId of accountFilter) {
+      if (rows.length >= limit) break
+      const accountRows = await ctx.db
+        .query("postedContent")
+        .withIndex("by_redditAccountId_and_createdAt", (q) =>
+          q.eq("redditAccountId", accountId).gte("createdAt", cutoff),
+        )
+        .order("desc")
+        .take(limit - rows.length)
+      rows.push(...accountRows.filter((row) => row.projectId === projectId))
+    }
+    return rows.sort((a, b) => b.createdAt - a.createdAt).slice(0, limit)
+  }
+
+  return await ctx.db
     .query("postedContent")
     .withIndex("by_projectId_and_createdAt", (q) =>
       q.eq("projectId", projectId).gte("createdAt", cutoff),
     )
-    .order("desc")) {
-    if (isSelectedAccount(accountFilter, row.redditAccountId)) rows.push(row)
-  }
-  return rows
+    .order("desc")
+    .take(limit)
 }
 
 async function getRollups(
@@ -193,15 +221,27 @@ async function getRollups(
   const cutoff = cutoffForTimeframe(timeframe)
   const cutoffDay = dayKey(cutoff)
   const rows: Doc<"dashboardDailyRollups">[] = []
-  for await (const row of ctx.db
+
+  if (accountFilter) {
+    for (const accountId of accountFilter) {
+      if (rows.length >= DASHBOARD_ROLLUP_READ_LIMIT) break
+      const accountRows = await ctx.db
+        .query("dashboardDailyRollups")
+        .withIndex("by_projectId_and_accountKey_and_day", (q) =>
+          q.eq("projectId", projectId).eq("accountKey", accountKey(accountId)).gte("day", cutoffDay),
+        )
+        .take(DASHBOARD_ROLLUP_READ_LIMIT - rows.length)
+      rows.push(...accountRows)
+    }
+    return rows
+  }
+
+  return await ctx.db
     .query("dashboardDailyRollups")
     .withIndex("by_projectId_and_day", (q) =>
       q.eq("projectId", projectId).gte("day", cutoffDay),
-    )) {
-    if (timeframe !== "all" && row.day < cutoffDay) continue
-    if (isSelectedAccount(accountFilter, row.redditAccountId)) rows.push(row)
-  }
-  return rows
+    )
+    .take(DASHBOARD_ROLLUP_READ_LIMIT)
 }
 
 async function getRollupOrContentTotals(
@@ -211,25 +251,29 @@ async function getRollupOrContentTotals(
   accountFilter: AccountFilter,
 ) {
   const rollups = await getRollups(ctx, projectId, timeframe, accountFilter)
-  const contentFallback = await getPostedContent(ctx, projectId, timeframe, accountFilter)
-  const allRowsRolledUp =
-    contentFallback.length > 0 &&
-    contentFallback.every((row) => row.dashboardRollupAppliedAt !== undefined)
 
-  if (rollups.length > 0 && allRowsRolledUp) {
+  if (rollups.length > 0) {
+    const unrolledContent = (await getPostedContent(ctx, projectId, timeframe, accountFilter))
+      .filter((row) => row.dashboardRollupAppliedAt === undefined)
     return {
-      postsCount: rollups.reduce((sum, row) => sum + row.postsCount, 0),
-      karmaEarned: rollups.reduce((sum, row) => sum + row.karmaEarned, 0),
+      postsCount:
+        rollups.reduce((sum, row) => sum + row.postsCount, 0) + unrolledContent.length,
+      karmaEarned:
+        rollups.reduce((sum, row) => sum + row.karmaEarned, 0) +
+        unrolledContent.reduce((sum, row) => sum + row.score, 0),
       rollups,
       contentFallback: null,
+      unrolledContent,
     }
   }
 
+  const contentFallback = await getPostedContent(ctx, projectId, timeframe, accountFilter)
   return {
     postsCount: contentFallback.length,
     karmaEarned: contentFallback.reduce((sum, row) => sum + row.score, 0),
     rollups,
     contentFallback,
+    unrolledContent: [],
   }
 }
 
@@ -240,15 +284,32 @@ async function getApprovalRate(
   accountFilter: AccountFilter,
 ) {
   const cutoff = cutoffForTimeframe(timeframe)
+  const cards: Doc<"cards">[] = []
+
+  if (accountFilter) {
+    for (const accountId of accountFilter) {
+      if (cards.length >= DASHBOARD_APPROVAL_READ_LIMIT) break
+      const accountCards = await ctx.db
+        .query("cards")
+        .withIndex("by_projectId_and_redditAccountId_and_createdAt", (q) =>
+          q.eq("projectId", projectId).eq("redditAccountId", accountId).gte("createdAt", cutoff),
+        )
+        .take(DASHBOARD_APPROVAL_READ_LIMIT - cards.length)
+      cards.push(...accountCards)
+    }
+  } else {
+    const projectCards = await ctx.db
+      .query("cards")
+      .withIndex("by_projectId_and_createdAt", (q) =>
+        q.eq("projectId", projectId).gte("createdAt", cutoff),
+      )
+      .take(DASHBOARD_APPROVAL_READ_LIMIT)
+    cards.push(...projectCards)
+  }
+
   let decided = 0
   let approved = 0
-
-  for await (const card of ctx.db
-    .query("cards")
-    .withIndex("by_projectId_and_createdAt", (q) =>
-      q.eq("projectId", projectId).gte("createdAt", cutoff),
-    )) {
-    if (!isSelectedAccount(accountFilter, card.redditAccountId)) continue
+  for (const card of cards) {
     if (card.status === "pending" || card.status === "expired") continue
     decided += 1
     if (
@@ -626,6 +687,7 @@ export const getTrendData = query({
   },
   handler: async (ctx, args) => {
     const { project } = await requireProjectAccessByRef(ctx, args.projectRef)
+    requireGrowthAnalytics(project)
     const accountFilter = await validateAccountFilter(ctx, project._id, args.redditAccountIds)
     const totals = await getRollupOrContentTotals(ctx, project._id, args.timeframe, accountFilter)
     const contentFallback = totals.contentFallback
@@ -646,6 +708,10 @@ export const getTrendData = query({
         for (const row of totals.rollups) {
           if (buckets.has(row.day)) buckets.set(row.day, (buckets.get(row.day) ?? 0) + row.karmaEarned)
         }
+        for (const item of totals.unrolledContent) {
+          const key = dayKey(item.createdAt)
+          if (buckets.has(key)) buckets.set(key, (buckets.get(key) ?? 0) + item.score)
+        }
       }
 
       return [...buckets.entries()].map(([key, karma]) => ({ period: displayDay(key), karma }))
@@ -661,6 +727,10 @@ export const getTrendData = query({
       for (const row of totals.rollups) {
         const key = row.day.slice(0, 7)
         monthTotals.set(key, (monthTotals.get(key) ?? 0) + row.karmaEarned)
+      }
+      for (const item of totals.unrolledContent) {
+        const key = monthKey(item.createdAt)
+        monthTotals.set(key, (monthTotals.get(key) ?? 0) + item.score)
       }
     }
     if (monthTotals.size === 0) return []
@@ -683,6 +753,7 @@ export const getBestPerforming = query({
   },
   handler: async (ctx, args) => {
     const { project } = await requireProjectAccessByRef(ctx, args.projectRef)
+    requireGrowthAnalytics(project)
     const accountFilter = await validateAccountFilter(ctx, project._id, args.redditAccountIds)
     const postedContent = await getPostedContent(ctx, project._id, args.timeframe, accountFilter)
     const best = postedContent.sort((a, b) => b.score - a.score).slice(0, 5)
@@ -824,14 +895,13 @@ export const prepareDashboardAnalyticsRefresh = internalMutation({
       return { groups: [] }
     }
     const accountFilter = await validateAccountFilter(ctx, args.projectId, args.redditAccountIds)
-    const cutoff = cutoffForTimeframe(args.timeframe, now)
     const rows = await ctx.db
       .query("postedContent")
-      .withIndex("by_projectId_and_createdAt", (q) =>
-        q.eq("projectId", args.projectId).gte("createdAt", cutoff),
+      .withIndex("by_projectId_and_lastAnalyticsAttemptAt", (q) =>
+        q.eq("projectId", args.projectId),
       )
-      .order("desc")
-      .take(150)
+      .order("asc")
+      .take(DASHBOARD_REFRESH_CANDIDATE_LIMIT)
 
     const grouped = new Map<string, RefreshGroup>()
     for (const row of rows) {
@@ -860,6 +930,7 @@ export const prepareDashboardAnalyticsRefresh = internalMutation({
       const key = `${args.projectId}:${account.zernioAccountId}:${parentRedditThingId}`
       let group = grouped.get(key)
       if (!group) {
+        if (grouped.size >= DASHBOARD_REFRESH_GROUP_LIMIT) continue
         const existingLock = await ctx.db
           .query("dashboardAnalyticsLocks")
           .withIndex("by_key", (q) => q.eq("key", key))
@@ -907,7 +978,7 @@ export const prepareDashboardAnalyticsRefresh = internalMutation({
       })
     }
 
-    return { groups: [...grouped.values()].slice(0, 12) }
+    return { groups: [...grouped.values()] }
   },
 })
 
@@ -983,6 +1054,20 @@ export const markDashboardAnalyticsGroupFailed = internalMutation({
   },
 })
 
+export const releaseDashboardAnalyticsGroupLock = internalMutation({
+  args: {
+    groupKey: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const lock = await ctx.db
+      .query("dashboardAnalyticsLocks")
+      .withIndex("by_key", (q) => q.eq("key", args.groupKey))
+      .first()
+    if (lock) await ctx.db.patch(lock._id, { expiresAt: Date.now() })
+    return null
+  },
+})
+
 export const acquireFetchLayerFallbackSlot = internalMutation({
   args: {
     projectId: v.id("projects"),
@@ -1036,8 +1121,16 @@ export const runDashboardAnalyticsRefresh = internalAction({
       args,
     )
     let fallbackFetches = 0
+    let retryAfterMs: number | null = null
 
     await mapWithConcurrency(prepared.groups, ANALYTICS_CONCURRENCY, async (group) => {
+      if (retryAfterMs !== null) {
+        await ctx.runMutation(internal.analytics.releaseDashboardAnalyticsGroupLock, {
+          groupKey: group.key,
+        })
+        return
+      }
+
       try {
         const thread = await getRedditInboxThread(ctx, {
           accountId: group.zernioAccountId,
@@ -1054,12 +1147,14 @@ export const runDashboardAnalyticsRefresh = internalAction({
         })
         return
       } catch (error) {
-        const retryAfterMs = error instanceof ProviderHttpError ? error.retryAfterMs : undefined
-        if (retryAfterMs) {
-          await ctx.scheduler.runAfter(retryAfterMs, internal.analytics.runDashboardAnalyticsRefresh, args)
+        const groupRetryAfterMs = error instanceof ProviderHttpError ? error.retryAfterMs : undefined
+        if (groupRetryAfterMs) {
+          retryAfterMs = retryAfterMs === null
+            ? groupRetryAfterMs
+            : Math.min(retryAfterMs, groupRetryAfterMs)
         }
 
-        if (group.fallbackEligible && fallbackFetches < FETCHLAYER_FALLBACKS_PER_RUN && group.parentPermalink) {
+        if (!groupRetryAfterMs && group.fallbackEligible && fallbackFetches < FETCHLAYER_FALLBACKS_PER_RUN && group.parentPermalink) {
           fallbackFetches += 1
           const slot: { allowed: boolean } = await ctx.runMutation(
             internal.analytics.acquireFetchLayerFallbackSlot,
@@ -1091,6 +1186,10 @@ export const runDashboardAnalyticsRefresh = internalAction({
       }
     })
 
+    if (retryAfterMs !== null) {
+      await ctx.scheduler.runAfter(retryAfterMs, internal.analytics.runDashboardAnalyticsRefresh, args)
+    }
+
     await ctx.runMutation(internal.analytics.markAnalyticsRefreshed, {
       projectId: args.projectId,
       refreshedAt: Date.now(),
@@ -1101,15 +1200,15 @@ export const runDashboardAnalyticsRefresh = internalAction({
 
 export const backfillDashboardAnalyticsMetadata = internalMutation({
   args: {
-    beforeCreatedAt: v.optional(v.number()),
+    paginationOpts: v.optional(paginationOptsValidator),
   },
   handler: async (ctx, args) => {
-    const beforeCreatedAt = args.beforeCreatedAt ?? Date.now() + 1
-    const rows = await ctx.db
+    const page = await ctx.db
       .query("postedContent")
-      .withIndex("by_createdAt", (q) => q.lt("createdAt", beforeCreatedAt))
+      .withIndex("by_createdAt")
       .order("desc")
-      .take(100)
+      .paginate(args.paginationOpts ?? { numItems: 100, cursor: null })
+    const rows = page.page
 
     for (const row of rows) {
       const card = await ctx.db.get(row.cardId)
@@ -1128,13 +1227,52 @@ export const backfillDashboardAnalyticsMetadata = internalMutation({
       await ctx.db.patch(row._id, rollupPatch)
     }
 
-    if (rows.length === 100) {
+    if (!page.isDone) {
       await ctx.scheduler.runAfter(0, internal.analytics.backfillDashboardAnalyticsMetadata, {
-        beforeCreatedAt: rows[rows.length - 1].createdAt,
+        paginationOpts: { numItems: 100, cursor: page.continueCursor },
       })
     }
 
     return { processed: rows.length }
+  },
+})
+
+export const cleanupDashboardAnalyticsOperationalData = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const now = Date.now()
+    const [sessions, locks, fallbackUsage] = await Promise.all([
+      ctx.db
+        .query("dashboardAnalyticsSessions")
+        .withIndex("by_expiresAt", (q) => q.lt("expiresAt", now))
+        .take(DASHBOARD_CLEANUP_BATCH_SIZE),
+      ctx.db
+        .query("dashboardAnalyticsLocks")
+        .withIndex("by_expiresAt", (q) => q.lt("expiresAt", now))
+        .take(DASHBOARD_CLEANUP_BATCH_SIZE),
+      ctx.db
+        .query("analyticsFallbackUsage")
+        .withIndex("by_resetAt", (q) => q.lt("resetAt", now))
+        .take(DASHBOARD_CLEANUP_BATCH_SIZE),
+    ])
+
+    for (const row of sessions) await ctx.db.delete(row._id)
+    for (const row of locks) await ctx.db.delete(row._id)
+    for (const row of fallbackUsage) await ctx.db.delete(row._id)
+
+    if (
+      sessions.length === DASHBOARD_CLEANUP_BATCH_SIZE ||
+      locks.length === DASHBOARD_CLEANUP_BATCH_SIZE ||
+      fallbackUsage.length === DASHBOARD_CLEANUP_BATCH_SIZE
+    ) {
+      await ctx.scheduler.runAfter(0, internal.analytics.cleanupDashboardAnalyticsOperationalData, {})
+    }
+
+    return {
+      sessions: sessions.length,
+      locks: locks.length,
+      fallbackUsage: fallbackUsage.length,
+    }
   },
 })
 
