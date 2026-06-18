@@ -1512,6 +1512,59 @@ describe("poster helpers", () => {
     expect(scheduled).toHaveLength(1)
   })
 
+  test("Zernio official reply response stores commentId as Reddit id", async () => {
+    const t = convexTest(schema, modules)
+    const { projectId } = await seedProject(t)
+    const redditAccountId = await seedRedditAccount(t, projectId)
+    const cardId = await t.run(async (ctx) => {
+      const surfacedPostId = await ctx.db.insert("surfacedPosts", {
+        projectId,
+        redditPostId: "parent123",
+        redditThingId: "t3_parent123",
+        subreddit: "startups",
+        title: "Parent post",
+        url: "https://www.reddit.com/r/startups/comments/parent123/parent/",
+        score: 10,
+        commentCount: 2,
+        postedAt: Date.now(),
+        surfacedAt: Date.now(),
+      })
+      return await ctx.db.insert("cards", {
+        projectId,
+        surfacedPostId,
+        redditAccountId,
+        type: "reply",
+        targetSubreddit: "startups",
+        draftContent: "Helpful reply",
+        status: "scheduled",
+        createdAt: Date.now(),
+      })
+    })
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      success: true,
+      data: { commentId: "cmt_123", isReply: true, cid: "legacy_cid" },
+    })))
+    vi.stubGlobal("fetch", fetchMock)
+
+    await t.action(internal.pipeline.poster.postToReddit, { cardId })
+
+    const { card, posted } = await t.run(async (ctx) => {
+      const rows = await ctx.db
+        .query("postedContent")
+        .withIndex("by_cardId", (q) => q.eq("cardId", cardId))
+        .take(1)
+      return { card: await ctx.db.get(cardId), posted: rows[0] }
+    })
+
+    expect(card?.status).toBe("posted")
+    expect(card?.redditCommentId).toBe("cmt_123")
+    expect(posted).toMatchObject({
+      redditId: "cmt_123",
+      redditThingId: "t1_cmt_123",
+      parentRedditThingId: "t3_parent123",
+    })
+  })
+
   test("unhealthy assigned account can be replaced by another healthy active account", async () => {
     const t = convexTest(schema, modules)
     const { projectId } = await seedProject(t)

@@ -48,6 +48,7 @@ const redditActivityStatus = v.union(
 )
 const subredditAddedBy = v.union(v.literal("agent"), v.literal("user"))
 const cardType = v.union(v.literal("reply"), v.literal("original"))
+const timeframe = v.union(v.literal("7d"), v.literal("30d"), v.literal("all"))
 const cardStatus = v.union(
   v.literal("pending"),
   v.literal("approved"),
@@ -344,6 +345,8 @@ export default defineSchema({
     redditAccountId: v.optional(v.id("redditAccounts")),
     redditId: v.string(),
     redditThingId: v.optional(v.string()),
+    parentRedditThingId: v.optional(v.string()),
+    parentPermalink: v.optional(v.string()),
     zernioPostId: v.optional(v.string()),
     subreddit: v.string(),
     type: v.optional(cardType),
@@ -352,13 +355,22 @@ export default defineSchema({
     replyCount: v.number(),
     visibility: contentVisibility,
     lastCheckedAt: v.number(),
+    lastAnalyticsAttemptAt: v.optional(v.number()),
+    lastAnalyticsError: v.optional(v.string()),
+    analyticsFailureCount: v.optional(v.number()),
+    lastAnalyticsSource: v.optional(v.union(v.literal("zernio"), v.literal("fetchlayer"))),
+    fetchLayerFallbackLastAttemptAt: v.optional(v.number()),
+    fetchLayerFallbackCooldownUntil: v.optional(v.number()),
+    dashboardRollupAppliedAt: v.optional(v.number()),
+    dashboardRollupScore: v.optional(v.number()),
     createdAt: v.number(),
   })
     .index("by_projectId", ["projectId"])
     .index("by_cardId", ["cardId"])
     .index("by_projectId_and_createdAt", ["projectId", "createdAt"])
     .index("by_createdAt", ["createdAt"])
-    .index("by_redditAccountId_and_createdAt", ["redditAccountId", "createdAt"]),
+    .index("by_redditAccountId_and_createdAt", ["redditAccountId", "createdAt"])
+    .index("by_projectId_and_parentRedditThingId", ["projectId", "parentRedditThingId"]),
 
   notifications: defineTable({
     projectId: v.id("projects"),
@@ -395,6 +407,53 @@ export default defineSchema({
     requestedAt: v.number(),
     createdAt: v.number(),
   }).index("by_provider_and_requestedAt", ["provider", "requestedAt"]),
+
+  dashboardAnalyticsSessions: defineTable({
+    projectId: v.id("projects"),
+    sessionId: v.string(),
+    timeframe,
+    redditAccountIds: v.array(v.id("redditAccounts")),
+    openedAt: v.number(),
+    lastHeartbeatAt: v.number(),
+    expiresAt: v.number(),
+    closedAt: v.optional(v.number()),
+  })
+    .index("by_projectId_and_sessionId", ["projectId", "sessionId"])
+    .index("by_expiresAt", ["expiresAt"]),
+
+  dashboardAnalyticsLocks: defineTable({
+    key: v.string(),
+    projectId: v.id("projects"),
+    zernioAccountId: v.string(),
+    parentRedditThingId: v.string(),
+    acquiredAt: v.number(),
+    expiresAt: v.number(),
+  })
+    .index("by_key", ["key"])
+    .index("by_expiresAt", ["expiresAt"]),
+
+  dashboardDailyRollups: defineTable({
+    projectId: v.id("projects"),
+    redditAccountId: v.optional(v.id("redditAccounts")),
+    accountKey: v.string(),
+    day: v.string(),
+    postsCount: v.number(),
+    karmaEarned: v.number(),
+    lastActivityAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_projectId_and_day", ["projectId", "day"])
+    .index("by_projectId_and_accountKey_and_day", ["projectId", "accountKey", "day"]),
+
+  analyticsFallbackUsage: defineTable({
+    key: v.string(),
+    projectId: v.id("projects"),
+    count: v.number(),
+    resetAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_key", ["key"])
+    .index("by_resetAt", ["resetAt"]),
 
   oauthRateLimitBuckets: defineTable({
     key: v.string(),
