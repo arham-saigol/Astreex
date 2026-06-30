@@ -61,6 +61,14 @@ async function readResponseBody(response: Response) {
   }
 }
 
+function shortBodyError(body: unknown) {
+  if (typeof body === "string") return body.slice(0, 500)
+  if (body && typeof body === "object" && "error" in body) {
+    return String((body as { error?: unknown }).error).slice(0, 500)
+  }
+  return undefined
+}
+
 export async function providerFetchJson<T>(
   ctx: ActionCtx,
   provider: Provider,
@@ -76,16 +84,18 @@ export async function providerFetchJson<T>(
   try {
     const response = await fetch(input, { ...init, signal: controller.signal })
     const body = await readResponseBody(response)
-    void ctx.runMutation(internal.providerRequestLog.log, {
-      provider,
-      endpoint,
-      status: response.status,
-      ok: response.ok,
-      durationMs: Date.now() - requestedAt,
-      requestedAt,
-    }).catch(() => null)
 
     if (!response.ok) {
+      const durationMs = Date.now() - requestedAt
+      void ctx.runMutation(internal.providerRequestLog.log, {
+        provider,
+        endpoint,
+        status: response.status,
+        ok: false,
+        durationMs,
+        error: shortBodyError(body),
+        requestedAt,
+      }).catch(() => null)
       const retryAfterMs =
         parseRetryAfterMs(response.headers.get("Retry-After")) ??
         parseRateLimitResetMs(response.headers.get("X-RateLimit-Reset"))

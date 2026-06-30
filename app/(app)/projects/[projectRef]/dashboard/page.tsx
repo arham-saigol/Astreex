@@ -447,7 +447,7 @@ export default function DashboardPage() {
     ? { projectRef: context.projectRef, timeframe, redditAccountIds: selectedAccountIds }
     : "skip"
 
-  const hasGrowthAnalytics = context?.plan === "growth" || context?.plan === "scale"
+  const hasGrowthAnalytics = context?.hasGrowthAnalytics === true
   const gatedQueryArgs = hasGrowthAnalytics ? queryArgs : "skip"
 
   const metrics = useQuery(api.analytics.getDashboardMetrics, queryArgs)
@@ -478,23 +478,23 @@ export default function DashboardPage() {
     }
     const heartbeat = () => {
       if (document.visibilityState !== "visible") return
+      void heartbeatSession(args).catch(() => null)
+    }
+    const refresh = () => {
+      if (document.visibilityState !== "visible") return
       void heartbeatSession(args).then(() => requestRefresh(args)).catch(() => null)
     }
     const close = () => {
       void closeSession({ projectRef: context.projectRef, sessionId }).catch(() => null)
     }
     const handleVisibility = () => {
-      if (document.visibilityState === "visible") heartbeat()
+      if (document.visibilityState === "visible") refresh()
       else close()
     }
 
-    heartbeat()
+    refresh()
     const heartbeatTimer = window.setInterval(heartbeat, 20_000)
-    const refreshTimer = window.setInterval(() => {
-      if (document.visibilityState === "visible") {
-        void requestRefresh(args).catch(() => null)
-      }
-    }, 5 * 60_000)
+    const refreshTimer = window.setInterval(refresh, 5 * 60_000)
     document.addEventListener("visibilitychange", handleVisibility)
 
     return () => {

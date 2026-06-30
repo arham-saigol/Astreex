@@ -319,6 +319,41 @@ function readCommentsPayload(payload: unknown) {
   return { post, comments: comments as ZernioInboxComment[], cursor }
 }
 
+function bareRedditId(value: string | undefined) {
+  if (!value) return null
+  return value.replace(/^t[13]_/, "")
+}
+
+function collectFoundCommentIds(comments: ZernioInboxComment[], found: Set<string>) {
+  for (const comment of comments) {
+    for (const value of [
+      comment.id,
+      comment._id,
+      comment.commentId,
+      comment.redditId,
+      comment.thingId,
+      comment.name,
+      comment.fullname,
+    ]) {
+      const bare = bareRedditId(value)
+      if (bare) found.add(bare)
+    }
+    collectFoundCommentIds([
+      ...(Array.isArray(comment.replies) ? comment.replies : []),
+      ...(Array.isArray(comment.comments) ? comment.comments : []),
+    ], found)
+  }
+}
+
+function allTargetCommentsFound(comments: ZernioInboxComment[], targetCommentIds: string[] | undefined) {
+  if (!targetCommentIds || targetCommentIds.length === 0) return false
+  const targets = new Set(targetCommentIds.map(bareRedditId).filter((id): id is string => Boolean(id)))
+  if (targets.size === 0) return false
+  const found = new Set<string>()
+  collectFoundCommentIds(comments, found)
+  return [...targets].every((target) => found.has(target))
+}
+
 export async function getRedditInboxComments(
   ctx: ActionCtx,
   args: {
@@ -341,18 +376,26 @@ export async function getRedditInboxComments(
 
 export async function getRedditInboxThread(
   ctx: ActionCtx,
-  args: { accountId: string; postId: string; subreddit: string },
+  args: {
+    accountId: string
+    postId: string
+    subreddit: string
+    maxPages?: number
+    targetCommentIds?: string[]
+  },
 ): Promise<ZernioInboxThread> {
   let cursor: string | null = null
   let post: ZernioInboxThread["post"] | undefined
   const comments: ZernioInboxComment[] = []
   let raw: unknown = null
+  const maxPages = Math.max(1, Math.min(args.maxPages ?? 10, 10))
 
-  for (let page = 0; page < 10; page++) {
+  for (let page = 0; page < maxPages; page++) {
     raw = await getRedditInboxComments(ctx, { ...args, cursor, limit: 100 })
     const parsed = readCommentsPayload(raw)
     if (!post && parsed.post) post = parsed.post as ZernioInboxThread["post"]
     comments.push(...parsed.comments)
+    if (allTargetCommentsFound(comments, args.targetCommentIds)) break
     if (!parsed.cursor) break
     cursor = parsed.cursor
   }

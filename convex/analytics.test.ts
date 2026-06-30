@@ -290,6 +290,198 @@ describe("analytics refresh", () => {
     expect(locks).toHaveLength(12)
   })
 
+  test("dashboard refresh requests coalesce per visible dashboard", async () => {
+    const t = convexTest(schema, modules)
+    const now = Date.now()
+    const { projectRef } = await t.run(async (ctx) => {
+      const userId = await ctx.db.insert("users", {
+        tokenIdentifier: "test|user_1",
+        email: "founder@example.com",
+        createdAt: now,
+      })
+      const projectId = await ctx.db.insert("projects", {
+        userId,
+        publicId: "p_refreshcoalesce",
+        slug: "astreex",
+        name: "Astreex",
+        plan: "growth",
+        planStatus: "active",
+        onboardingStatus: "complete",
+        timezone: "America/New_York",
+        lastActiveAt: now,
+        createdAt: now,
+      })
+      const redditAccountId = await ctx.db.insert("redditAccounts", {
+        projectId,
+        redditUsername: "founder",
+        zernioAccountId: "acct_1",
+        isActive: true,
+        healthStatus: "healthy",
+        createdAt: now,
+      })
+      const cardId = await ctx.db.insert("cards", {
+        projectId,
+        surfacedPostId: null,
+        redditAccountId,
+        type: "original",
+        targetSubreddit: "startups",
+        draftContent: "Title\nBody",
+        status: "posted",
+        createdAt: now,
+      })
+      await ctx.db.insert("postedContent", {
+        projectId,
+        cardId,
+        redditAccountId,
+        redditId: "post_1",
+        redditThingId: "t3_post_1",
+        parentRedditThingId: "t3_post_1",
+        subreddit: "startups",
+        type: "original",
+        score: 0,
+        replyCount: 0,
+        visibility: "visible",
+        lastCheckedAt: now - 60 * 60 * 1000,
+        nextAnalyticsRefreshAt: now - 1,
+        createdAt: now,
+      })
+      await ctx.db.insert("dashboardAnalyticsSessions", {
+        projectId,
+        sessionId: "session_1",
+        timeframe: "30d",
+        redditAccountIds: [],
+        openedAt: now,
+        lastHeartbeatAt: now,
+        expiresAt: now + 30_000,
+      })
+      return { projectRef: "astreex-p_refreshcoalesce" }
+    })
+
+    const authed = t.withIdentity({ tokenIdentifier: "test|user_1" })
+    const first = await authed.mutation(api.analytics.requestDashboardAnalyticsRefresh, {
+      projectRef,
+      timeframe: "30d",
+      redditAccountIds: [],
+      sessionId: "session_1",
+    })
+    const second = await authed.mutation(api.analytics.requestDashboardAnalyticsRefresh, {
+      projectRef,
+      timeframe: "30d",
+      redditAccountIds: [],
+      sessionId: "session_1",
+    })
+    const jobs = await t.run(async (ctx) => await ctx.db.query("dashboardAnalyticsRefreshJobs").take(10))
+
+    expect(first.scheduled).toBe(true)
+    expect(second.scheduled).toBe(false)
+    expect(jobs).toHaveLength(1)
+  })
+
+  test("dashboard refresh ignores stale rows outside the selected timeframe", async () => {
+    const t = convexTest(schema, modules)
+    const now = Date.now()
+    const { projectId, redditAccountId } = await t.run(async (ctx) => {
+      const userId = await ctx.db.insert("users", {
+        tokenIdentifier: "test|user_1",
+        email: "founder@example.com",
+        createdAt: now,
+      })
+      const projectId = await ctx.db.insert("projects", {
+        userId,
+        name: "Astreex",
+        plan: "growth",
+        planStatus: "active",
+        onboardingStatus: "complete",
+        timezone: "America/New_York",
+        lastActiveAt: now,
+        createdAt: now,
+      })
+      const redditAccountId = await ctx.db.insert("redditAccounts", {
+        projectId,
+        redditUsername: "founder",
+        zernioAccountId: "acct_1",
+        isActive: true,
+        healthStatus: "healthy",
+        createdAt: now,
+      })
+      const cardId = await ctx.db.insert("cards", {
+        projectId,
+        surfacedPostId: null,
+        redditAccountId,
+        type: "original",
+        targetSubreddit: "startups",
+        draftContent: "Title\nBody",
+        status: "posted",
+        createdAt: now,
+      })
+      await ctx.db.insert("postedContent", {
+        projectId,
+        cardId,
+        redditAccountId,
+        redditId: "old_stale",
+        redditThingId: "t3_old_stale",
+        parentRedditThingId: "t3_old_stale",
+        subreddit: "startups",
+        type: "original",
+        score: 0,
+        replyCount: 0,
+        visibility: "visible",
+        lastCheckedAt: now - 60 * 60 * 1000,
+        nextAnalyticsRefreshAt: now - 1,
+        createdAt: now - 10 * 24 * 60 * 60 * 1000,
+      })
+      await ctx.db.insert("dashboardAnalyticsSessions", {
+        projectId,
+        sessionId: "session_1",
+        timeframe: "7d",
+        redditAccountIds: [redditAccountId],
+        openedAt: now,
+        lastHeartbeatAt: now,
+        expiresAt: now + 30_000,
+      })
+      return { projectId, redditAccountId }
+    })
+
+    const prepared = await t.mutation(internal.analytics.prepareDashboardAnalyticsRefresh, {
+      projectId,
+      timeframe: "7d",
+      redditAccountIds: [redditAccountId],
+      sessionId: "session_1",
+    })
+
+    expect(prepared.groups).toHaveLength(0)
+  })
+
+  test("growth analytics require an active entitlement", async () => {
+    const t = convexTest(schema, modules)
+    const now = Date.now()
+    const { projectRef } = await t.run(async (ctx) => {
+      const userId = await ctx.db.insert("users", {
+        tokenIdentifier: "test|user_1",
+        email: "founder@example.com",
+        createdAt: now,
+      })
+      await ctx.db.insert("projects", {
+        userId,
+        publicId: "p_pastdueanalytics",
+        slug: "astreex",
+        name: "Astreex",
+        plan: "growth",
+        planStatus: "past_due",
+        onboardingStatus: "complete",
+        timezone: "America/New_York",
+        lastActiveAt: now,
+        createdAt: now,
+      })
+      return { projectRef: "astreex-p_pastdueanalytics" }
+    })
+
+    await expect(t.withIdentity({ tokenIdentifier: "test|user_1" }).query(
+      api.analytics.getTrendData,
+      { projectRef, timeframe: "30d" },
+    )).rejects.toThrow("Growth analytics")
+  })
+
   test("refreshAnalytics does not update lastAnalyticsRefresh while metrics are stubbed", async () => {
     const t = convexTest(schema, modules)
     const projectId = await t.run(async (ctx) => {

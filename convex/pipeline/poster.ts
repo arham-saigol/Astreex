@@ -16,6 +16,10 @@ import {
   type ZernioCommentResponse,
   type ZernioPostResponse,
 } from "../lib/zernio"
+import {
+  nextAnalyticsRefreshAt,
+  upsertDashboardRollupForPostedContent,
+} from "../lib/dashboardAnalytics"
 
 const tenMinutesMs = 10 * 60 * 1000
 const statusPollMs = 30 * 1000
@@ -599,7 +603,7 @@ export const markPostSucceeded = internalMutation({
       failureReason: undefined,
     })
 
-    await ctx.db.insert("postedContent", {
+    const postedContentId = await ctx.db.insert("postedContent", {
       projectId: card.projectId,
       cardId: args.cardId,
       redditAccountId: args.redditAccountId,
@@ -617,8 +621,16 @@ export const markPostSucceeded = internalMutation({
       lastCheckedAt: postedAt,
       lastAnalyticsAttemptAt: postedAt,
       lastAnalyticsSource: "zernio",
+      nextAnalyticsRefreshAt: nextAnalyticsRefreshAt(postedAt, postedAt),
       createdAt: postedAt,
     })
+    const postedContent = await ctx.db.get(postedContentId)
+    if (postedContent) {
+      await ctx.db.patch(
+        postedContentId,
+        await upsertDashboardRollupForPostedContent(ctx, postedContent, postedContent.score),
+      )
+    }
   },
 })
 
