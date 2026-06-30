@@ -61,10 +61,17 @@ async function readResponseBody(response: Response) {
   }
 }
 
+function redactProviderErrorText(text: string) {
+  return text
+    .replace(/\b(Bearer|OAuth)\s+[A-Za-z0-9._~+/-]+=*/gi, "$1 [REDACTED]")
+    .replace(/\beyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, "[REDACTED]")
+    .replace(/\b((?:access|refresh|id|oauth)?_?token)\b\s*[:=]\s*["']?[^"'\s&,}\]]+/gi, "$1=[REDACTED]")
+}
+
 function shortBodyError(body: unknown) {
-  if (typeof body === "string") return body.slice(0, 500)
+  if (typeof body === "string") return redactProviderErrorText(body).slice(0, 500)
   if (body && typeof body === "object" && "error" in body) {
-    return String((body as { error?: unknown }).error).slice(0, 500)
+    return redactProviderErrorText(String((body as { error?: unknown }).error)).slice(0, 500)
   }
   return undefined
 }

@@ -650,7 +650,7 @@ export const getDashboardMetrics = query({
     ])
 
     const worstHealth = accounts
-      .filter((account) => isSelectedAccount(accountFilter, account._id))
+      .filter((account) => account.isActive && isSelectedAccount(accountFilter, account._id))
       .reduce(
         (current, account) =>
           healthRank(account.healthStatus) > healthRank(current)
@@ -1001,7 +1001,8 @@ export const prepareDashboardAnalyticsRefresh = internalMutation({
             .order("desc")
             .take(DASHBOARD_REFRESH_CANDIDATE_LIMIT - rows.length))
             .filter((row) => row.projectId === args.projectId)
-        rows.push(...accountRows)
+        const staleRows = accountRows.filter((row) => isAnalyticsStale(row, now))
+        rows.push(...staleRows.slice(0, DASHBOARD_REFRESH_CANDIDATE_LIMIT - rows.length))
       }
     } else if (args.timeframe === "all") {
       rows.push(...await ctx.db
@@ -1262,7 +1263,7 @@ export const rescheduleDashboardAnalyticsRefreshJob = internalMutation({
     if (job) {
       await ctx.db.patch(job._id, {
         status: "queued",
-        expiresAt: now + Math.max(args.retryAfterMs, DASHBOARD_REFRESH_JOB_TTL),
+        expiresAt: now + Math.max(args.retryAfterMs, DASHBOARD_REFRESH_JOB_TTL) + 1,
         updatedAt: now,
       })
     }
@@ -1369,7 +1370,7 @@ export const runDashboardAnalyticsRefresh = internalAction({
           if (groupRetryAfterMs) {
             retryAfterMs = retryAfterMs === null
               ? groupRetryAfterMs
-              : Math.min(retryAfterMs, groupRetryAfterMs)
+              : Math.max(retryAfterMs, groupRetryAfterMs)
             await ctx.runMutation(internal.analytics.releaseDashboardAnalyticsGroupLock, {
               groupKey: group.key,
             })
