@@ -4,6 +4,7 @@ import { internal } from "../_generated/api"
 import type { Doc, Id } from "../_generated/dataModel"
 import { internalAction, internalMutation, internalQuery } from "../_generated/server"
 import { post as fetchLayerPost, type FetchLayerComment, type FetchLayerPost } from "../lib/fetchLayer"
+import { upsertDashboardRollupForPostedContent } from "../lib/dashboardAnalytics"
 import { getAccountHealth, normalizeAccountHealth } from "../lib/zernio"
 
 const batchSize = 30
@@ -375,7 +376,15 @@ export const updatePostedContentVisibility = internalMutation({
     redditAccountId: v.optional(v.id("redditAccounts")),
   },
   handler: async (ctx, args) => {
+    const row = await ctx.db.get(args.postedContentId)
+    if (!row) return null
+    const nextScore = args.score ?? row.score
+    const rollupPatch = args.score !== undefined
+      ? await upsertDashboardRollupForPostedContent(ctx, row, nextScore)
+      : {}
+
     await ctx.db.patch(args.postedContentId, {
+      ...rollupPatch,
       visibility: args.visibility,
       ...(args.score !== undefined ? { score: args.score } : {}),
       ...(args.replyCount !== undefined ? { replyCount: args.replyCount } : {}),
@@ -384,6 +393,7 @@ export const updatePostedContentVisibility = internalMutation({
         : {}),
       lastCheckedAt: Date.now(),
     })
+    return null
   },
 })
 

@@ -128,6 +128,12 @@ function addDays(key: string, days: number) {
   return dayKey(date.getTime())
 }
 
+function rollupStartDayForTimeframe(timeframe: Timeframe, now = Date.now()) {
+  const cutoff = cutoffForTimeframe(timeframe, now)
+  const cutoffDay = dayKey(cutoff)
+  return cutoff === Date.parse(cutoffDay) ? cutoffDay : addDays(cutoffDay, 1)
+}
+
 function addMonths(key: string, months: number) {
   const [year, month] = key.split("-").map(Number)
   const date = new Date(Date.UTC(year, month - 1 + months, 1))
@@ -228,17 +234,6 @@ async function hasDueRefreshCandidate(
     return false
   }
 
-  if (timeframe !== "all") {
-    const rows = await ctx.db
-      .query("postedContent")
-      .withIndex("by_projectId_and_createdAt", (q) =>
-        q.eq("projectId", projectId).gte("createdAt", cutoff),
-      )
-      .order("desc")
-      .take(300)
-    return rows.some((row) => isAnalyticsStale(row, now))
-  }
-
   const dueRows = await ctx.db
     .query("postedContent")
     .withIndex("by_projectId_and_nextAnalyticsRefreshAt", (q) =>
@@ -249,12 +244,16 @@ async function hasDueRefreshCandidate(
 
   const legacyRows = await ctx.db
     .query("postedContent")
-    .withIndex("by_projectId_and_createdAt", (q) =>
-      q.eq("projectId", projectId).gte("createdAt", cutoff),
+    .withIndex("by_projectId_and_lastAnalyticsAttemptAt", (q) =>
+      q.eq("projectId", projectId),
     )
-    .order("desc")
+    .order("asc")
     .take(100)
-  return legacyRows.some((row) => row.nextAnalyticsRefreshAt === undefined && isAnalyticsStale(row, now))
+  return legacyRows.some((row) =>
+    row.createdAt >= cutoff &&
+    row.nextAnalyticsRefreshAt === undefined &&
+    isAnalyticsStale(row, now)
+  )
 }
 
 function hasGrowthAnalyticsEntitlement(project: Pick<Doc<"projects">, "plan" | "planStatus">) {
@@ -282,14 +281,13 @@ async function getPostedContent(
 
   if (accountFilter) {
     for (const accountId of accountFilter) {
-      if (rows.length >= limit) break
       const accountRows = await ctx.db
         .query("postedContent")
         .withIndex("by_redditAccountId_and_createdAt", (q) =>
           q.eq("redditAccountId", accountId).gte("createdAt", cutoff),
         )
         .order("desc")
-        .take(limit - rows.length)
+        .take(limit)
       rows.push(...accountRows.filter((row) => row.projectId === projectId))
     }
     return rows.sort((a, b) => b.createdAt - a.createdAt).slice(0, limit)
@@ -309,9 +307,9 @@ async function getRollups(
   projectId: Id<"projects">,
   timeframe: Timeframe,
   accountFilter: AccountFilter,
+  now = Date.now(),
 ) {
-  const cutoff = cutoffForTimeframe(timeframe)
-  const cutoffDay = dayKey(cutoff)
+  const rollupStartDay = rollupStartDayForTimeframe(timeframe, now)
   const rows: Doc<"dashboardDailyRollups">[] = []
 
   if (accountFilter) {
@@ -320,7 +318,7 @@ async function getRollups(
       const accountRows = await ctx.db
         .query("dashboardDailyRollups")
         .withIndex("by_projectId_and_accountKey_and_day", (q) =>
-          q.eq("projectId", projectId).eq("accountKey", accountKey(accountId)).gte("day", cutoffDay),
+          q.eq("projectId", projectId).eq("accountKey", accountKey(accountId)).gte("day", rollupStartDay),
         )
         .take(DASHBOARD_ROLLUP_READ_LIMIT - rows.length)
       rows.push(...accountRows)
@@ -331,7 +329,7 @@ async function getRollups(
   return await ctx.db
     .query("dashboardDailyRollups")
     .withIndex("by_projectId_and_day", (q) =>
-      q.eq("projectId", projectId).gte("day", cutoffDay),
+      q.eq("projectId", projectId).gte("day", rollupStartDay),
     )
     .take(DASHBOARD_ROLLUP_READ_LIMIT)
 }
@@ -342,11 +340,15 @@ async function getRollupOrContentTotals(
   timeframe: Timeframe,
   accountFilter: AccountFilter,
 ) {
-  const rollups = await getRollups(ctx, projectId, timeframe, accountFilter)
+  const now = Date.now()
+  const rollups = await getRollups(ctx, projectId, timeframe, accountFilter, now)
 
   if (rollups.length > 0) {
+    const rollupStartDay = rollupStartDayForTimeframe(timeframe, now)
     const unrolledContent = (await getPostedContent(ctx, projectId, timeframe, accountFilter))
-      .filter((row) => row.dashboardRollupAppliedAt === undefined)
+      .filter((row) =>
+        row.dashboardRollupAppliedAt === undefined || dayKey(row.createdAt) < rollupStartDay
+      )
     return {
       postsCount:
         rollups.reduce((sum, row) => sum + row.postsCount, 0) + unrolledContent.length,
