@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react"
 import Link from "next/link"
 import { useParams, useRouter } from "next/navigation"
-import { useQuery } from "convex/react"
+import { useMutation, useQuery } from "convex/react"
 import {
   CartesianGrid,
   Line,
@@ -13,10 +13,18 @@ import {
   XAxis,
   YAxis,
 } from "recharts"
-import { ArrowUpRight, Download } from "lucide-react"
+import { ArrowUpRight, ChevronDown, Download } from "lucide-react"
 
 import { api } from "@/convex/_generated/api"
+import type { Id } from "@/convex/_generated/dataModel"
 import { Button, buttonVariants } from "@/components/ui/button"
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { Skeleton } from "@/components/ui/skeleton"
 import { cn } from "@/lib/utils"
 
@@ -121,6 +129,53 @@ function TimeframeSelector({
         )
       })}
     </div>
+  )
+}
+
+function AccountSelector({
+  accounts,
+  selectedAccountIds,
+  onChange,
+}: {
+  accounts: Array<{ _id: Id<"redditAccounts">; redditUsername: string }>
+  selectedAccountIds: Id<"redditAccounts">[]
+  onChange: (ids: Id<"redditAccounts">[]) => void
+}) {
+  if (accounts.length <= 1) return null
+
+  const selected = new Set(selectedAccountIds)
+  const label = selectedAccountIds.length === 0
+    ? "All accounts"
+    : selectedAccountIds.length === 1
+      ? `u/${accounts.find((account) => account._id === selectedAccountIds[0])?.redditUsername ?? "Account"}`
+      : `${selectedAccountIds.length} accounts`
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger className={buttonVariants({ variant: "outline", size: "sm", className: "gap-1.5" })}>
+        {label}
+        <ChevronDown className="size-3.5" />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-56">
+        <DropdownMenuItem onClick={() => onChange([])}>
+          All accounts
+        </DropdownMenuItem>
+        {accounts.map((account) => (
+          <DropdownMenuCheckboxItem
+            key={account._id}
+            checked={selected.has(account._id)}
+            onCheckedChange={(checked) => {
+              const next = new Set(selectedAccountIds)
+              if (checked) next.add(account._id)
+              else next.delete(account._id)
+              onChange([...next])
+            }}
+          >
+            u/{account.redditUsername}
+          </DropdownMenuCheckboxItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }
 
@@ -371,10 +426,15 @@ function BestPerformingList({
 
 export default function DashboardPage() {
   const [timeframe, setTimeframe] = useState<Timeframe | null>(null)
+  const [selectedAccountIds, setSelectedAccountIds] = useState<Id<"redditAccounts">[]>([])
+  const [sessionId] = useState(() => crypto.randomUUID())
   const params = useParams<{ projectRef: string }>()
   const router = useRouter()
   const projectRef = params.projectRef
 
+  const heartbeatSession = useMutation(api.analytics.heartbeatDashboardAnalyticsSession)
+  const closeSession = useMutation(api.analytics.closeDashboardAnalyticsSession)
+  const requestRefresh = useMutation(api.analytics.requestDashboardAnalyticsRefresh)
   const context = useQuery(api.analytics.getDashboardContext, { projectRef })
 
   useEffect(() => {
@@ -384,10 +444,10 @@ export default function DashboardPage() {
   }, [context, projectRef, router])
 
   const queryArgs = context && timeframe
-    ? { projectRef: context.projectRef, timeframe }
+    ? { projectRef: context.projectRef, timeframe, redditAccountIds: selectedAccountIds }
     : "skip"
 
-  const hasGrowthAnalytics = context?.plan === "growth" || context?.plan === "scale"
+  const hasGrowthAnalytics = context?.hasGrowthAnalytics === true
   const gatedQueryArgs = hasGrowthAnalytics ? queryArgs : "skip"
 
   const metrics = useQuery(api.analytics.getDashboardMetrics, queryArgs)
@@ -407,7 +467,53 @@ export default function DashboardPage() {
     window.localStorage.setItem("astreex-dashboard-timeframe", timeframe)
   }, [timeframe])
 
-  const showRefreshShimmer = false
+  useEffect(() => {
+    if (!context || timeframe === null) return
+
+    const args = {
+      projectRef: context.projectRef,
+      timeframe,
+      redditAccountIds: selectedAccountIds,
+      sessionId,
+    }
+    const heartbeat = () => {
+      if (document.visibilityState !== "visible") return
+      void heartbeatSession(args).catch(() => null)
+    }
+    const refresh = () => {
+      if (document.visibilityState !== "visible") return
+      void heartbeatSession(args).then(() => requestRefresh(args)).catch(() => null)
+    }
+    const close = () => {
+      void closeSession({ projectRef: context.projectRef, sessionId }).catch(() => null)
+    }
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible") refresh()
+      else close()
+    }
+
+    refresh()
+    const heartbeatTimer = window.setInterval(heartbeat, 20_000)
+    const refreshTimer = window.setInterval(refresh, 5 * 60_000)
+    document.addEventListener("visibilitychange", handleVisibility)
+
+    return () => {
+      window.clearInterval(heartbeatTimer)
+      window.clearInterval(refreshTimer)
+      document.removeEventListener("visibilitychange", handleVisibility)
+      close()
+    }
+  }, [
+    closeSession,
+    context,
+    heartbeatSession,
+    requestRefresh,
+    selectedAccountIds,
+    sessionId,
+    timeframe,
+  ])
+
+  const showRefreshShimmer = metrics?.status === "stale" || metrics?.status === "retrying"
 
   if (context === undefined || timeframe === null) {
     return <DashboardSkeleton />
@@ -437,6 +543,14 @@ export default function DashboardPage() {
   const plan = context.plan as Plan
   const displayedTrendData = trendData ?? previewTrendData()
   const displayedBestPerforming = bestPerforming ?? []
+  const analyticsLabel = metrics.lastUpdatedAt
+    ? `Updated ${timeAgo(metrics.lastUpdatedAt)}`
+    : "Waiting for first post"
+  const analyticsState = metrics.status === "retrying"
+    ? "Failed / retrying"
+    : metrics.status === "stale"
+      ? "Refreshing"
+      : "Fresh"
 
   return (
     <div className="space-y-8">
@@ -445,6 +559,14 @@ export default function DashboardPage() {
           Dashboard
         </h1>
         <div className="flex items-center gap-2">
+          <span className="hidden text-[13px] text-text-tertiary sm:inline">
+            {analyticsState} · {analyticsLabel}
+          </span>
+          <AccountSelector
+            accounts={context.redditAccounts}
+            selectedAccountIds={selectedAccountIds}
+            onChange={setSelectedAccountIds}
+          />
           {plan === "scale" ? (
             <Button variant="outline" size="sm" className="gap-1.5" disabled>
               <Download className="size-3.5" />
