@@ -378,6 +378,9 @@ export const updatePostedContentVisibility = internalMutation({
   handler: async (ctx, args) => {
     const row = await ctx.db.get(args.postedContentId)
     if (!row) return null
+    if (args.redditAccountId !== undefined && args.redditAccountId !== row.redditAccountId) {
+      throw new Error("Changing posted content Reddit account is not supported")
+    }
     const nextScore = args.score ?? row.score
     const rollupPatch = args.score !== undefined
       ? await upsertDashboardRollupForPostedContent(ctx, row, nextScore)

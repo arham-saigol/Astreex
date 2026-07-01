@@ -212,13 +212,26 @@ async function hasDueRefreshCandidate(
 
   if (accountFilter) {
     for (const accountId of accountFilter) {
+      if (timeframe !== "all") {
+        const recentRows = ctx.db
+          .query("postedContent")
+          .withIndex("by_redditAccountId_and_createdAt", (q) =>
+            q.eq("redditAccountId", accountId).gte("createdAt", cutoff),
+          )
+          .order("desc")
+        for await (const row of recentRows) {
+          if (row.projectId === projectId && isAnalyticsStale(row, now)) return true
+        }
+        continue
+      }
+
       const rows = await ctx.db
         .query("postedContent")
         .withIndex("by_projectId_and_redditAccountId_and_nextAnalyticsRefreshAt", (q) =>
           q.eq("projectId", projectId).eq("redditAccountId", accountId).lte("nextAnalyticsRefreshAt", now),
         )
         .take(10)
-      if (rows.some((row) => row.createdAt >= cutoff)) return true
+      if (rows.length > 0) return true
       const legacyRows = await ctx.db
         .query("postedContent")
         .withIndex("by_redditAccountId_and_createdAt", (q) =>
@@ -234,13 +247,26 @@ async function hasDueRefreshCandidate(
     return false
   }
 
+  if (timeframe !== "all") {
+    const recentRows = ctx.db
+      .query("postedContent")
+      .withIndex("by_projectId_and_createdAt", (q) =>
+        q.eq("projectId", projectId).gte("createdAt", cutoff),
+      )
+      .order("desc")
+    for await (const row of recentRows) {
+      if (isAnalyticsStale(row, now)) return true
+    }
+    return false
+  }
+
   const dueRows = await ctx.db
     .query("postedContent")
     .withIndex("by_projectId_and_nextAnalyticsRefreshAt", (q) =>
       q.eq("projectId", projectId).lte("nextAnalyticsRefreshAt", now),
     )
     .take(25)
-  if (dueRows.some((row) => row.createdAt >= cutoff)) return true
+  if (dueRows.length > 0) return true
 
   const legacyRows = await ctx.db
     .query("postedContent")
@@ -250,7 +276,6 @@ async function hasDueRefreshCandidate(
     .order("asc")
     .take(100)
   return legacyRows.some((row) =>
-    row.createdAt >= cutoff &&
     row.nextAnalyticsRefreshAt === undefined &&
     isAnalyticsStale(row, now)
   )

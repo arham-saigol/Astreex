@@ -476,6 +476,121 @@ describe("analytics refresh", () => {
     expect(result.scheduled).toBe(true)
   })
 
+  test("account-filtered timeboxed refresh requests search the recent window before stale checks", async () => {
+    const t = convexTest(schema, modules)
+    const now = Date.now()
+    const { projectRef, redditAccountId } = await t.run(async (ctx) => {
+      const userId = await ctx.db.insert("users", {
+        tokenIdentifier: "test|user_1",
+        email: "founder@example.com",
+        createdAt: now,
+      })
+      const projectId = await ctx.db.insert("projects", {
+        userId,
+        publicId: "p_accountrefreshdue",
+        slug: "astreex",
+        name: "Astreex",
+        plan: "growth",
+        planStatus: "active",
+        onboardingStatus: "complete",
+        timezone: "America/New_York",
+        lastActiveAt: now,
+        createdAt: now,
+      })
+      const redditAccountId = await ctx.db.insert("redditAccounts", {
+        projectId,
+        redditUsername: "founder",
+        zernioAccountId: "acct_1",
+        isActive: true,
+        healthStatus: "healthy",
+        createdAt: now,
+      })
+      const cardId = await ctx.db.insert("cards", {
+        projectId,
+        surfacedPostId: null,
+        redditAccountId,
+        type: "original",
+        targetSubreddit: "startups",
+        draftContent: "Title\nBody",
+        status: "posted",
+        createdAt: now,
+      })
+
+      for (let index = 0; index < 10; index++) {
+        await ctx.db.insert("postedContent", {
+          projectId,
+          cardId,
+          redditAccountId,
+          redditId: `old_due_${index}`,
+          redditThingId: `t3_old_due_${index}`,
+          parentRedditThingId: `t3_old_due_${index}`,
+          subreddit: "startups",
+          type: "original",
+          score: 0,
+          replyCount: 0,
+          visibility: "visible",
+          lastCheckedAt: now - 60 * 60 * 1000,
+          lastAnalyticsAttemptAt: now - 60 * 60 * 1000,
+          nextAnalyticsRefreshAt: now - 60_000 - index,
+          createdAt: now - 10 * 24 * 60 * 60 * 1000,
+        })
+      }
+      for (let index = 0; index < 25; index++) {
+        await ctx.db.insert("postedContent", {
+          projectId,
+          cardId,
+          redditAccountId,
+          redditId: `fresh_${index}`,
+          redditThingId: `t3_fresh_${index}`,
+          parentRedditThingId: `t3_fresh_${index}`,
+          subreddit: "startups",
+          type: "original",
+          score: 0,
+          replyCount: 0,
+          visibility: "visible",
+          lastCheckedAt: now,
+          lastAnalyticsAttemptAt: now,
+          nextAnalyticsRefreshAt: now + 60_000,
+          createdAt: now - index,
+        })
+      }
+      await ctx.db.insert("postedContent", {
+        projectId,
+        cardId,
+        redditAccountId,
+        redditId: "newer_due",
+        redditThingId: "t3_newer_due",
+        parentRedditThingId: "t3_newer_due",
+        subreddit: "startups",
+        type: "original",
+        score: 0,
+        replyCount: 0,
+        visibility: "visible",
+        lastCheckedAt: now - 60 * 60 * 1000,
+        lastAnalyticsAttemptAt: now - 60 * 60 * 1000,
+        nextAnalyticsRefreshAt: now - 1,
+        createdAt: now - 24 * 60 * 60 * 1000,
+      })
+      await ctx.db.insert("dashboardAnalyticsSessions", {
+        projectId,
+        sessionId: "session_1",
+        timeframe: "7d",
+        redditAccountIds: [redditAccountId],
+        openedAt: now,
+        lastHeartbeatAt: now,
+        expiresAt: now + 30_000,
+      })
+      return { projectRef: "astreex-p_accountrefreshdue", redditAccountId }
+    })
+
+    const result = await t.withIdentity({ tokenIdentifier: "test|user_1" }).mutation(
+      api.analytics.requestDashboardAnalyticsRefresh,
+      { projectRef, timeframe: "7d", redditAccountIds: [redditAccountId], sessionId: "session_1" },
+    )
+
+    expect(result.scheduled).toBe(true)
+  })
+
   test("dashboard refresh ignores stale rows outside the selected timeframe", async () => {
     const t = convexTest(schema, modules)
     const now = Date.now()
@@ -812,7 +927,7 @@ describe("analytics refresh", () => {
   test("health monitor score updates keep dashboard rollups in sync", async () => {
     const t = convexTest(schema, modules)
     const now = Date.now()
-    const { postedContentId, projectId, redditAccountId, day } = await t.run(async (ctx) => {
+    const { postedContentId, projectId, redditAccountId, secondAccountId, day } = await t.run(async (ctx) => {
       const userId = await ctx.db.insert("users", {
         tokenIdentifier: "test|user_1",
         email: "founder@example.com",
@@ -832,6 +947,14 @@ describe("analytics refresh", () => {
         projectId,
         redditUsername: "founder",
         zernioAccountId: "acct_1",
+        isActive: true,
+        healthStatus: "healthy",
+        createdAt: now,
+      })
+      const secondAccountId = await ctx.db.insert("redditAccounts", {
+        projectId,
+        redditUsername: "founder_alt",
+        zernioAccountId: "acct_2",
         isActive: true,
         healthStatus: "healthy",
         createdAt: now,
@@ -874,7 +997,7 @@ describe("analytics refresh", () => {
         dashboardRollupScore: 1,
         createdAt: now,
       })
-      return { postedContentId, projectId, redditAccountId, day }
+      return { postedContentId, projectId, redditAccountId, secondAccountId, day }
     })
 
     await t.mutation(internal.pipeline.healthMonitor.updatePostedContentVisibility, {
@@ -897,5 +1020,10 @@ describe("analytics refresh", () => {
     expect(rollup?.karmaEarned).toBe(7)
     expect(postedContent?.score).toBe(7)
     expect(postedContent?.dashboardRollupScore).toBe(7)
+    await expect(t.mutation(internal.pipeline.healthMonitor.updatePostedContentVisibility, {
+      postedContentId,
+      visibility: "visible",
+      redditAccountId: secondAccountId,
+    })).rejects.toThrow("Changing posted content Reddit account is not supported")
   })
 })
